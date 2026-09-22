@@ -645,6 +645,56 @@ a {
   text-decoration: underline;
 }
 
+/* Box de Destaque / Callout (Estilo Editorial Neo-Brutalist) */
+.callout-box {
+  margin: 2em 0;
+  padding: 1.2em 1.4em;
+  border: 2px solid #000000;
+  box-shadow: 4px 4px 0px #000000;
+  background-color: transparent;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+.callout-box h1,
+.callout-box h2,
+.callout-box h3,
+.callout-box h4,
+.callout-box h5,
+.callout-box h6,
+.callout-box .callout-title {
+  font-family: sans-serif;
+  font-size: 1.15em;
+  font-weight: bold;
+  line-height: 1.3;
+  margin-top: 0;
+  margin-bottom: 0.6em;
+  text-align: left;
+  page-break-after: avoid;
+  break-after: avoid;
+}
+
+.callout-box p {
+  margin-top: 0;
+  margin-bottom: 0.6em;
+  line-height: 1.55;
+  text-align: justify;
+}
+
+.callout-box p:last-child {
+  margin-bottom: 0;
+}
+
+.callout-box ul,
+.callout-box ol {
+  margin: 0.5em 0 0.5em 1.2em;
+  padding-left: 0;
+}
+
+.callout-box li {
+  margin-bottom: 0.3em;
+}
+
 /* Capítulos */
 .chapter-header {
   border-bottom: 2px solid #333;

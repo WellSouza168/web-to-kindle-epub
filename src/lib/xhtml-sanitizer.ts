@@ -5,7 +5,7 @@
 const FORBIDDEN_TAGS = new Set([
   'script', 'style', 'iframe', 'noscript', 'form', 'input', 'button',
   'svg', 'canvas', 'object', 'embed', 'video', 'audio', 'track', 'source',
-  'select', 'textarea', 'nav', 'footer', 'header', 'aside'
+  'select', 'textarea', 'nav', 'footer', 'header'
 ]);
 
 const ALLOWED_ATTRIBUTES = new Set([
@@ -50,6 +50,30 @@ function cleanElement(el: Element, options: { removeImages?: boolean }): void {
     if (FORBIDDEN_TAGS.has(tagName)) {
       child.remove();
       continue;
+    }
+
+    // Se for <aside>, converter para <div class="callout-box">
+    if (tagName === 'aside') {
+      const div = child.ownerDocument.createElement('div');
+      div.className = 'callout-box';
+      while (child.firstChild) {
+        div.appendChild(child.firstChild);
+      }
+      child.parentNode?.replaceChild(div, child);
+      cleanElement(div, options);
+      continue;
+    }
+
+    // Detectar blocos de destaque / callouts e normalizar para class="callout-box"
+    const isCallout =
+      child.getAttribute('data-callout') === 'true' ||
+      /\b(callout|destaque|box-materia|infobox|wp-block-group|box-destaque|box_destaque|sidebar-box)\b/i.test(child.className || '');
+
+    if (isCallout && (child.textContent || '').trim().length > 30) {
+      child.className = 'callout-box';
+      child.removeAttribute('data-callout');
+    } else if (child.className && child.className !== 'callout-box') {
+      child.removeAttribute('class');
     }
 
     // Remover imagens se solicitado
