@@ -22,7 +22,34 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .catch((err) => sendResponse({ success: false, error: err.message }));
     return true;
   }
+
+  if (message.type === 'FETCH_PAGE_HTML') {
+    handleFetchPageHtml(message.url)
+      .then(sendResponse)
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
 });
+
+async function handleFetchPageHtml(url: string) {
+  const response = await fetch(url, {
+    headers: {
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+    },
+    credentials: 'include'
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch page HTML: ${response.status} ${response.statusText}`);
+  }
+
+  const html = await response.text();
+  return {
+    success: true,
+    html,
+    url: response.url || url
+  };
+}
 
 async function handleFetchImage(url: string) {
   const response = await fetch(url, {

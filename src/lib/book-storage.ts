@@ -118,6 +118,50 @@ export async function reorderArticlesInPublication(
 }
 
 /**
+ * Importa uma edição inteira de revista para o livro, configurando título, subtítulo,
+ * capa oficial (se disponível) e todos os artigos como capítulos.
+ */
+export async function importEditionToPublication(
+  editionTitle: string,
+  editionSubtitle: string,
+  author: string,
+  coverDataUrl: string | undefined,
+  articles: ArticleMetadata[]
+): Promise<BookPublication> {
+  const pub = await loadPublication();
+
+  pub.title = editionTitle;
+  pub.subtitle = editionSubtitle;
+  pub.author = author;
+
+  if (coverDataUrl) {
+    pub.cover = {
+      type: 'custom',
+      presetTheme: pub.cover.presetTheme || 'passages-dark',
+      customImageDataUrl: coverDataUrl
+    };
+  }
+
+  // Converter e adicionar todos os artigos
+  const newArticles: BookArticle[] = articles.map((article, idx) => ({
+    id: `art_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 7)}`,
+    title: article.title,
+    byline: article.byline,
+    siteName: article.siteName,
+    excerpt: article.excerpt,
+    url: article.url,
+    readingTimeMinutes: article.readingTimeMinutes,
+    wordCount: article.wordCount,
+    contentHtml: article.contentHtml,
+    savedAt: new Date().toISOString()
+  }));
+
+  pub.articles = newArticles;
+  await savePublication(pub);
+  return pub;
+}
+
+/**
  * Limpa todos os artigos da coletânea e reseta para um novo rascunho.
  */
 export async function clearPublication(): Promise<BookPublication> {

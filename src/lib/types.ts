@@ -63,3 +63,23 @@ export interface BookPublication {
   updatedAt: string;
 }
 
+export interface DetectedEditionArticle {
+  id: string;
+  url: string;
+  title: string;
+  section?: string;
+  byline?: string;
+  description?: string;
+  thumbnailUrl?: string;
+  selected: boolean;
+}
+
+export interface DetectedEdition {
+  title: string;
+  subtitle?: string;
+  siteName: string;
+  coverImageUrl?: string;
+  pageUrl: string;
+  articles: DetectedEditionArticle[];
+}
+

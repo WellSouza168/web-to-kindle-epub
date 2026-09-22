@@ -17,10 +17,13 @@ import {
   BookMarked,
   Sparkles,
   Layers,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Library
 } from 'lucide-react';
-import { ArticleMetadata, BookPublication, CoverTheme, ExtractionStatus } from '../lib/types';
+import { ArticleMetadata, BookPublication, CoverTheme, ExtractionStatus, DetectedEdition } from '../lib/types';
 import { extractArticleFromHtml } from '../lib/readability';
+import { detectEditionArticles } from '../lib/edition-detector';
+import { fetchEditionArticlesBatch, fetchEditionCoverDataUrl } from '../lib/batch-fetcher';
 import { extractAndProcessImages } from '../lib/image-fetcher';
 import { generateKindleEpub, generatePublicationEpub } from '../lib/epub-generator';
 import { generateBookCover } from '../lib/cover-generator';
@@ -31,6 +34,7 @@ import {
   removeArticleFromPublication,
   reorderArticlesInPublication,
   clearPublication,
+  importEditionToPublication,
   DEFAULT_PUBLICATION
 } from '../lib/book-storage';
 
@@ -45,6 +49,12 @@ export const App: React.FC = () => {
   const [singleAuthor, setSingleAuthor] = useState('');
   const [includeImages, setIncludeImages] = useState(true);
   const [addCoverPage, setAddCoverPage] = useState(true);
+
+  // Estado de Edição de Revista Detectada (Batch Importer)
+  const [detectedEdition, setDetectedEdition] = useState<DetectedEdition | null>(null);
+  const [isBatchImporting, setIsBatchImporting] = useState(false);
+  const [batchProgress, setBatchProgress] = useState<{ current: number; total: number; title: string } | null>(null);
+  const [batchSuccessToast, setBatchSuccessToast] = useState(false);
 
   // Estado da Coletânea / Livro
   const [publication, setPublication] = useState<BookPublication>(DEFAULT_PUBLICATION);
@@ -120,20 +130,110 @@ export const App: React.FC = () => {
         throw new Error('Falha ao capturar o código HTML da página.');
       }
 
-      const parsed = extractArticleFromHtml(pageData.html, pageData.url);
-      if (!parsed) {
-        throw new Error('Não foi detectado um artigo principal nesta página.');
-      }
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(pageData.html, 'text/html');
 
-      setArticle(parsed);
-      setSingleTitle(parsed.title);
-      setSingleAuthor(parsed.byline || parsed.siteName || '');
-      setStatus({ state: 'ready' });
+      // 1. Verificar se a página atual é um índice/sumário de edição de revista
+      const detected = detectEditionArticles(doc, pageData.url);
+      setDetectedEdition(detected);
+
+      // 2. Extrair artigo individual via Readability
+      const parsed = extractArticleFromHtml(pageData.html, pageData.url);
+      if (parsed) {
+        setArticle(parsed);
+        setSingleTitle(parsed.title);
+        setSingleAuthor(parsed.byline || parsed.siteName || '');
+        setStatus({ state: 'ready' });
+      } else if (detected) {
+        // Se a página for um índice de edição sem um artigo individual longo
+        setArticle(null);
+        setStatus({ state: 'ready' });
+      } else {
+        throw new Error('Não foi detectado um artigo principal ou edição nesta página.');
+      }
     } catch (err: any) {
       setStatus({
         state: 'error',
         errorMessage: err.message || 'Erro inesperado ao extrair conteúdo.'
       });
+    }
+  };
+
+  // Alternar seleção de matéria na lista da edição
+  const handleToggleArticleSelection = (articleId: string) => {
+    if (!detectedEdition) return;
+    setDetectedEdition({
+      ...detectedEdition,
+      articles: detectedEdition.articles.map((a) =>
+        a.id === articleId ? { ...a, selected: !a.selected } : a
+      )
+    });
+  };
+
+  const handleSelectAllArticles = () => {
+    if (!detectedEdition) return;
+    setDetectedEdition({
+      ...detectedEdition,
+      articles: detectedEdition.articles.map((a) => ({ ...a, selected: true }))
+    });
+  };
+
+  const handleDeselectAllArticles = () => {
+    if (!detectedEdition) return;
+    setDetectedEdition({
+      ...detectedEdition,
+      articles: detectedEdition.articles.map((a) => ({ ...a, selected: false }))
+    });
+  };
+
+  // Importar edição completa em lote para a aba "Meu Livro"
+  const handleImportBatchEdition = async () => {
+    if (!detectedEdition) return;
+
+    const selectedArticles = detectedEdition.articles.filter((a) => a.selected);
+    if (selectedArticles.length === 0) return;
+
+    setIsBatchImporting(true);
+    setBatchProgress({ current: 0, total: selectedArticles.length, title: 'Iniciando download da edição...' });
+
+    try {
+      // 1. Fazer download da capa oficial da edição, se disponível
+      let coverDataUrl: string | undefined = undefined;
+      if (detectedEdition.coverImageUrl) {
+        setBatchProgress({ current: 0, total: selectedArticles.length, title: 'Carregando capa oficial da revista...' });
+        const res = await fetchEditionCoverDataUrl(detectedEdition.coverImageUrl);
+        if (res) coverDataUrl = res;
+      }
+
+      // 2. Fazer download e extração em lote de todas as matérias
+      const downloadedArticles = await fetchEditionArticlesBatch(
+        detectedEdition.articles,
+        (current, total, articleTitle) => {
+          setBatchProgress({ current, total, title: `Baixando (${current}/${total}): ${articleTitle}` });
+        }
+      );
+
+      // 3. Importar para a publicação
+      const updated = await importEditionToPublication(
+        detectedEdition.title,
+        detectedEdition.subtitle || 'Edição Completa',
+        detectedEdition.siteName,
+        coverDataUrl,
+        downloadedArticles
+      );
+
+      setPublication(updated);
+      setIsBatchImporting(false);
+      setBatchProgress(null);
+      setBatchSuccessToast(true);
+
+      // Redirecionar diretamente para a aba "Meu Livro" para revisão e download do EPUB
+      setActiveTab('book');
+      setTimeout(() => setBatchSuccessToast(false), 4000);
+    } catch (err: any) {
+      console.error('[Batch Import] Erro durante a importação da edição:', err);
+      setIsBatchImporting(false);
+      setBatchProgress(null);
     }
   };
 
@@ -429,119 +529,282 @@ export const App: React.FC = () => {
             </div>
           )}
 
-          {(status.state === 'ready' || status.state === 'generating' || downloadSuccessToast) && article && (
+          {(status.state === 'ready' || status.state === 'generating' || downloadSuccessToast || batchSuccessToast) && (
             <div className="space-y-4">
-              {/* Card de Métricas do Artigo */}
-              <div className="flex items-center justify-between text-xs px-3 py-2 bg-slate-50 border border-slate-200/80 rounded-lg text-slate-600">
-                <div className="flex items-center gap-1.5">
-                  <Clock className="w-3.5 h-3.5 text-amber-600" />
-                  <span><strong>{article.readingTimeMinutes} min</strong></span>
-                </div>
-                <div className="text-slate-300">•</div>
-                <div>{article.wordCount.toLocaleString('pt-BR')} palavras</div>
-                <div className="text-slate-300">•</div>
-                <div className="truncate max-w-[130px] font-medium text-slate-500" title={article.siteName || ''}>
-                  {article.siteName || 'Web'}
-                </div>
-              </div>
+              {/* Card de Edição de Revista Detectada */}
+              {detectedEdition && (
+                <div className="bg-gradient-to-br from-amber-500/10 via-amber-500/5 to-slate-50 border border-amber-500/30 rounded-xl p-3.5 space-y-3 shadow-xs">
+                  <div className="flex gap-3">
+                    {/* Capa da Edição */}
+                    {detectedEdition.coverImageUrl ? (
+                      <div className="relative shrink-0 w-16 h-24 bg-slate-900 rounded-md overflow-hidden border border-amber-500/40 shadow-sm">
+                        <img
+                          src={detectedEdition.coverImageUrl}
+                          alt="Capa da Edição"
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                    ) : (
+                      <div className="shrink-0 w-16 h-24 bg-amber-100 rounded-md flex flex-col items-center justify-center text-amber-800 text-[10px] font-bold border border-amber-300 p-1 text-center">
+                        <Library className="w-5 h-5 mb-1 text-amber-600" />
+                        Edição
+                      </div>
+                    )}
 
-              {/* Campos Editáveis */}
-              <div className="space-y-2.5">
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                    Título do Artigo
-                  </label>
-                  <input
-                    type="text"
-                    value={singleTitle}
-                    onChange={(e) => setSingleTitle(e.target.value)}
-                    disabled={status.state === 'generating'}
-                    className="w-full text-xs font-medium px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/40 focus:border-amber-500 bg-white"
-                  />
-                </div>
+                    {/* Título e Metadados da Edição */}
+                    <div className="flex-1 min-w-0 flex flex-col justify-between">
+                      <div>
+                        <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-amber-700 mb-0.5">
+                          <Sparkles className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                          <span>Edição Detectada</span>
+                        </div>
+                        <h2 className="font-serif font-bold text-sm text-slate-900 truncate leading-snug" title={detectedEdition.title}>
+                          {detectedEdition.title}
+                        </h2>
+                        {detectedEdition.subtitle && (
+                          <p className="text-[11px] text-slate-500 italic truncate">
+                            {detectedEdition.subtitle}
+                          </p>
+                        )}
+                      </div>
 
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                    Autor / Veículo Original
-                  </label>
-                  <input
-                    type="text"
-                    value={singleAuthor}
-                    onChange={(e) => setSingleAuthor(e.target.value)}
-                    disabled={status.state === 'generating'}
-                    className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/40 focus:border-amber-500 bg-white"
-                  />
-                </div>
-              </div>
+                      <div className="pt-1">
+                        <span className="inline-block text-[10px] font-semibold bg-amber-100/90 text-amber-800 px-2 py-0.5 rounded-full border border-amber-300/50">
+                          {detectedEdition.articles.filter((a) => a.selected).length} de {detectedEdition.articles.length} matérias selecionadas
+                        </span>
+                      </div>
+                    </div>
+                  </div>
 
-              {/* Opções */}
-              <div className="pt-2 border-t border-slate-100 space-y-2 text-xs">
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-700 font-medium">Embutir imagens no EPUB</span>
-                  <input
-                    type="checkbox"
-                    checked={includeImages}
-                    onChange={(e) => setIncludeImages(e.target.checked)}
-                    className="w-4 h-4 text-amber-600 rounded border-slate-300 focus:ring-amber-500"
-                  />
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-700 font-medium">Gerar página inicial de capa</span>
-                  <input
-                    type="checkbox"
-                    checked={addCoverPage}
-                    onChange={(e) => setAddCoverPage(e.target.checked)}
-                    className="w-4 h-4 text-amber-600 rounded border-slate-300 focus:ring-amber-500"
-                  />
-                </div>
-              </div>
+                  {/* Progresso de Download em Lote */}
+                  {batchProgress && (
+                    <div className="p-2.5 bg-amber-100/90 border border-amber-300 rounded-lg text-xs text-amber-900 space-y-1.5 animate-pulse">
+                      <div className="flex items-center justify-between font-medium">
+                        <span className="flex items-center gap-1.5 truncate pr-2">
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-600 shrink-0" />
+                          <span className="truncate">{batchProgress.title}</span>
+                        </span>
+                        <span className="shrink-0 font-bold">
+                          {batchProgress.current} / {batchProgress.total}
+                        </span>
+                      </div>
+                      <div className="w-full bg-amber-200 rounded-full h-1.5 overflow-hidden">
+                        <div
+                          className="bg-amber-600 h-1.5 rounded-full transition-all duration-300"
+                          style={{
+                            width: `${Math.round(((batchProgress.current || 0) / (batchProgress.total || 1)) * 100)}%`
+                          }}
+                        ></div>
+                      </div>
+                    </div>
+                  )}
 
-              {/* Toasts / Feedback */}
-              {addedSuccessToast && (
-                <div className="p-2.5 bg-amber-50 border border-amber-200 text-amber-900 rounded-lg text-xs flex items-center gap-2 animate-bounce">
-                  <Sparkles className="w-4 h-4 text-amber-600 shrink-0" />
-                  <span>Artigo adicionado com sucesso à sua coletânea!</span>
+                  {/* Checklist de Matérias */}
+                  <div className="border-t border-amber-500/20 pt-2 space-y-1.5">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="font-semibold text-slate-700">Matérias da Edição</span>
+                      <div className="flex gap-2 text-[10px]">
+                        <button
+                          onClick={handleSelectAllArticles}
+                          disabled={isBatchImporting}
+                          className="text-amber-700 hover:text-amber-900 font-medium cursor-pointer"
+                        >
+                          Marcar todas
+                        </button>
+                        <span className="text-slate-300">•</span>
+                        <button
+                          onClick={handleDeselectAllArticles}
+                          disabled={isBatchImporting}
+                          className="text-slate-500 hover:text-slate-700 cursor-pointer"
+                        >
+                          Desmarcar todas
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1 max-h-[145px] overflow-y-auto pr-1">
+                      {detectedEdition.articles.map((art) => (
+                        <label
+                          key={art.id}
+                          className={`flex items-start gap-2 p-1.5 rounded-md border text-xs cursor-pointer transition-colors ${
+                            art.selected
+                              ? 'bg-white border-amber-300/80 shadow-xs'
+                              : 'bg-slate-50/70 border-slate-200 opacity-60'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={art.selected}
+                            onChange={() => handleToggleArticleSelection(art.id)}
+                            disabled={isBatchImporting}
+                            className="mt-0.5 w-3.5 h-3.5 text-amber-600 rounded border-slate-300 focus:ring-amber-500 shrink-0"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="font-medium text-[11px] text-slate-800 leading-snug truncate" title={art.title}>
+                              {art.title}
+                            </div>
+                            <div className="flex items-center gap-1.5 text-[9px] text-slate-400 mt-0.5">
+                              {art.section && (
+                                <span className="font-bold text-amber-700 uppercase tracking-wider">
+                                  {art.section}
+                                </span>
+                              )}
+                              {art.section && art.byline && <span>•</span>}
+                              {art.byline && <span className="truncate">{art.byline}</span>}
+                            </div>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+
+                    {/* Botão de Ação do Lote */}
+                    <button
+                      onClick={handleImportBatchEdition}
+                      disabled={isBatchImporting || detectedEdition.articles.filter((a) => a.selected).length === 0}
+                      className="w-full mt-2 py-2 px-3 bg-amber-500 hover:bg-amber-400 active:scale-[0.99] text-slate-950 rounded-lg font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition-all disabled:opacity-50 cursor-pointer"
+                    >
+                      {isBatchImporting ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          Importando ({batchProgress?.current || 0}/{batchProgress?.total || 0})...
+                        </>
+                      ) : (
+                        <>
+                          <Layers className="w-3.5 h-3.5" />
+                          Importar Edição para Meu Livro ({detectedEdition.articles.filter((a) => a.selected).length} Matérias)
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
               )}
 
-              {downloadSuccessToast && (
+              {/* Toast de Sucesso do Lote */}
+              {batchSuccessToast && (
                 <div className="p-2.5 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-lg text-xs flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>Download do EPUB concluído! Salvo em Downloads.</span>
+                  <span>Edição importada com sucesso! Todos os capítulos foram carregados.</span>
                 </div>
+              )}
+
+              {/* Card de Artigo Individual (exibido quando não há edição ou quando há artigo detectado) */}
+              {article && !detectedEdition && (
+                <>
+                  {/* Card de Métricas do Artigo */}
+                  <div className="flex items-center justify-between text-xs px-3 py-2 bg-slate-50 border border-slate-200/80 rounded-lg text-slate-600">
+                    <div className="flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-amber-600" />
+                      <span><strong>{article.readingTimeMinutes} min</strong></span>
+                    </div>
+                    <div className="text-slate-300">•</div>
+                    <div>{article.wordCount.toLocaleString('pt-BR')} palavras</div>
+                    <div className="text-slate-300">•</div>
+                    <div className="truncate max-w-[130px] font-medium text-slate-500" title={article.siteName || ''}>
+                      {article.siteName || 'Web'}
+                    </div>
+                  </div>
+
+                  {/* Campos Editáveis */}
+                  <div className="space-y-2.5">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                        Título do Artigo
+                      </label>
+                      <input
+                        type="text"
+                        value={singleTitle}
+                        onChange={(e) => setSingleTitle(e.target.value)}
+                        disabled={status.state === 'generating'}
+                        className="w-full text-xs font-medium px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/40 focus:border-amber-500 bg-white"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                        Autor / Veículo Original
+                      </label>
+                      <input
+                        type="text"
+                        value={singleAuthor}
+                        onChange={(e) => setSingleAuthor(e.target.value)}
+                        disabled={status.state === 'generating'}
+                        className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/40 focus:border-amber-500 bg-white"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Opções */}
+                  <div className="pt-2 border-t border-slate-100 space-y-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-700 font-medium">Embutir imagens no EPUB</span>
+                      <input
+                        type="checkbox"
+                        checked={includeImages}
+                        onChange={(e) => setIncludeImages(e.target.checked)}
+                        className="w-4 h-4 text-amber-600 rounded border-slate-300 focus:ring-amber-500"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-700 font-medium">Gerar página inicial de capa</span>
+                      <input
+                        type="checkbox"
+                        checked={addCoverPage}
+                        onChange={(e) => setAddCoverPage(e.target.checked)}
+                        className="w-4 h-4 text-amber-600 rounded border-slate-300 focus:ring-amber-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Toasts / Feedback */}
+                  {addedSuccessToast && (
+                    <div className="p-2.5 bg-amber-50 border border-amber-200 text-amber-900 rounded-lg text-xs flex items-center gap-2 animate-bounce">
+                      <Sparkles className="w-4 h-4 text-amber-600 shrink-0" />
+                      <span>Artigo adicionado com sucesso à sua coletânea!</span>
+                    </div>
+                  )}
+
+                  {downloadSuccessToast && (
+                    <div className="p-2.5 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-lg text-xs flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>Download do EPUB concluído! Salvo em Downloads.</span>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}
 
-          {/* Botões de Ação do Artigo Atual */}
-          <div className="mt-5 space-y-2 pt-3 border-t border-slate-100">
-            <button
-              onClick={handleAddToBook}
-              disabled={!article || status.state === 'extracting' || status.state === 'generating'}
-              className="w-full py-2.5 px-4 bg-slate-900 hover:bg-slate-800 active:scale-[0.99] text-white rounded-lg font-semibold text-xs flex items-center justify-center gap-2 shadow-sm transition-all"
-            >
-              <Plus className="w-4 h-4 text-amber-400" />
-              Adicionar este Artigo ao Meu Livro (+1)
-            </button>
+          {/* Botões de Ação do Artigo Atual (quando exibindo artigo individual) */}
+          {article && !detectedEdition && (
+            <div className="mt-5 space-y-2 pt-3 border-t border-slate-100">
+              <button
+                onClick={handleAddToBook}
+                disabled={status.state === 'extracting' || status.state === 'generating'}
+                className="w-full py-2.5 px-4 bg-slate-900 hover:bg-slate-800 active:scale-[0.99] text-white rounded-lg font-semibold text-xs flex items-center justify-center gap-2 shadow-sm transition-all"
+              >
+                <Plus className="w-4 h-4 text-amber-400" />
+                Adicionar este Artigo ao Meu Livro (+1)
+              </button>
 
-            <button
-              onClick={handleDownloadSingleArticle}
-              disabled={!article || status.state === 'extracting' || status.state === 'generating'}
-              className="w-full py-2 px-3 bg-amber-500 hover:bg-amber-400 active:scale-[0.99] text-slate-950 rounded-lg font-semibold text-xs flex items-center justify-center gap-2 shadow-sm transition-all"
-            >
-              {status.state === 'generating' ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  Gerando EPUB...
-                </>
-              ) : (
-                <>
-                  <Download className="w-3.5 h-3.5" />
-                  Baixar Apenas este Artigo Individual
-                </>
-              )}
-            </button>
-          </div>
+              <button
+                onClick={handleDownloadSingleArticle}
+                disabled={status.state === 'extracting' || status.state === 'generating'}
+                className="w-full py-2 px-3 bg-amber-500 hover:bg-amber-400 active:scale-[0.99] text-slate-950 rounded-lg font-semibold text-xs flex items-center justify-center gap-2 shadow-sm transition-all"
+              >
+                {status.state === 'generating' ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Gerando EPUB...
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-3.5 h-3.5" />
+                    Baixar Apenas este Artigo Individual
+                  </>
+                )}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
