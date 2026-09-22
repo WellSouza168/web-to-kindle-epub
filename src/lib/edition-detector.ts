@@ -5,9 +5,48 @@ import { DetectedEdition, DetectedEditionArticle } from './types';
  * Identifica quando a página atual é um sumário/índice editorial de uma edição
  * (ex: Superinteressante, Veja, Quatro Rodas, etc.) e extrai a lista estruturada de matérias.
  */
+export function isLikelyEditionUrl(url: URL): boolean {
+  const path = url.pathname.toLowerCase();
+  return (
+    /\/edicao\/\d+/i.test(path) ||
+    /\/edicoes\//i.test(path) ||
+    /\/superarquivo\//i.test(path) ||
+    /\/issue\/\d+/i.test(path) ||
+    /\/issues\//i.test(path) ||
+    /\/revista\//i.test(path) ||
+    /\/sumario\//i.test(path) ||
+    /\/caderno\//i.test(path) ||
+    /\/colecao\//i.test(path) ||
+    /\/archive\//i.test(path) ||
+    url.searchParams.has('edicao') ||
+    url.searchParams.has('issue')
+  );
+}
+
+/**
+ * Filtro e detector de edições de revistas / coletâneas de matérias.
+ * Identifica quando a página atual é um sumário/índice editorial de uma edição
+ * (ex: Superinteressante, Veja, Quatro Rodas, etc.) e extrai a lista estruturada de matérias.
+ */
 export function detectEditionArticles(doc: Document, pageUrl: string): DetectedEdition | null {
   const currentUrl = parseUrl(pageUrl);
   if (!currentUrl) return null;
+
+  const isEditionUrl = isLikelyEditionUrl(currentUrl);
+  const hasExplicitEditionContainer = !!doc.querySelector(
+    '.edition-content, .edition-container, [class*="edition-content"], .revista-edicao, .magazine-edition'
+  );
+
+  // Se a página NÃO é uma URL de edição e NÃO possui container explícito de edição:
+  // Verificar se é um artigo comum com corpo substancial (ex: notícia do G1 com "leia também").
+  // Artigos normais com matérias relacionadas NÃO devem ser tratados como edições completas.
+  if (!isEditionUrl && !hasExplicitEditionContainer) {
+    const articleBody = doc.querySelector('article, [itemprop="articleBody"], .article-content, .materia-conteudo, .post-content, .content-text');
+    const bodyTextLength = (articleBody?.textContent || '').trim().length;
+    if (bodyTextLength > 800) {
+      return null;
+    }
+  }
 
   // 1. Seletores de elementos que devem ser ignorados (cabeçalhos do site, rodapés, menus, etc.)
   const noiseSelectors = [
@@ -24,7 +63,21 @@ export function detectEditionArticles(doc: Document, pageUrl: string): DetectedE
     '.exp-menu-li',
     '.user-exp-row',
     '#user-exp-menu-wrapper',
-    '.mobile-assine'
+    '.mobile-assine',
+    // Artigos relacionados, blocos de recomendação e feeds secundários
+    '[class*="relacionad"]',
+    '[class*="veja-tambem"]',
+    '[class*="leia-tambem"]',
+    '[class*="mais-lidas"]',
+    '[class*="recomendad"]',
+    '[class*="trending"]',
+    '[class*="outbrain"]',
+    '[class*="taboola"]',
+    '.feed-post',
+    '.materia-relacionada',
+    '[data-component="related-articles"]',
+    '.widget-related',
+    '.widget-area'
   ].join(', ');
 
   // 2. Extrair título da edição e subtítulo
@@ -35,11 +88,14 @@ export function detectEditionArticles(doc: Document, pageUrl: string): DetectedE
   // 3. Procurar containers de matérias
   // Em páginas de revista como Superinteressante:
   // <section class="cards"> com múltiplos <div class="card ..."> ou <article>
-  const candidateCards = Array.from(
-    doc.querySelectorAll(
-      '.edition-content .card, .cards .card, .category-list .card, .list .card, .list-item, article.card, article.post, main article, [role="main"] article, .card'
-    )
-  );
+  let cardSelector = '.edition-content .card, .cards .card, .cards > div, [class*="edition"] .card';
+  if (isEditionUrl || hasExplicitEditionContainer) {
+    cardSelector += ', .category-list .card, .list .card, article.card, article.post, .card';
+  } else {
+    cardSelector = '.edition-content .card, .magazine-edition .card, [class*="edition-content"] .card';
+  }
+
+  const candidateCards = Array.from(doc.querySelectorAll(cardSelector));
 
   const seenUrls = new Set<string>();
   const articles: DetectedEditionArticle[] = [];
@@ -66,9 +122,9 @@ export function detectEditionArticles(doc: Document, pageUrl: string): DetectedE
     });
   }
 
-  // Se cartões específicos não renderam pelo menos 3 artigos, fazemos uma varredura geral
-  // no conteúdo principal (<main>, #main, ou body ignorando ruído)
-  if (articles.length < 3) {
+  // Se cartões específicos não renderam pelo menos 3 artigos E for URL de edição,
+  // fazemos uma varredura no conteúdo principal (<main>, #main, ou body ignorando ruído)
+  if (articles.length < 3 && isEditionUrl) {
     const mainContainer = doc.querySelector('main, #main, [role="main"], .main-container, .main-content') || doc.body;
     const allLinks = Array.from(mainContainer.querySelectorAll('a'));
 

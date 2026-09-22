@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { ArticleMetadata, BookPublication, CoverTheme, ExtractionStatus, DetectedEdition } from '../lib/types';
 import { extractArticleFromHtml } from '../lib/readability';
-import { detectEditionArticles } from '../lib/edition-detector';
+import { detectEditionArticles, isLikelyEditionUrl } from '../lib/edition-detector';
 import { fetchEditionArticlesBatch, fetchEditionCoverDataUrl } from '../lib/batch-fetcher';
 import { extractAndProcessImages } from '../lib/image-fetcher';
 import { generateKindleEpub, generatePublicationEpub } from '../lib/epub-generator';
@@ -41,6 +41,9 @@ import {
 export const App: React.FC = () => {
   // Controle de abas: 'current' (Artigo Atual) ou 'book' (Meu Livro / Coletânea)
   const [activeTab, setActiveTab] = useState<'current' | 'book'>('current');
+
+  // Modo de visualização na aba 'current': 'article' (Artigo Individual) ou 'edition' (Edição Completa)
+  const [viewMode, setViewMode] = useState<'article' | 'edition'>('article');
 
   // Estado do Artigo Atual
   const [article, setArticle] = useState<ArticleMetadata | null>(null);
@@ -143,10 +146,17 @@ export const App: React.FC = () => {
         setArticle(parsed);
         setSingleTitle(parsed.title);
         setSingleAuthor(parsed.byline || parsed.siteName || '');
+        if (detected) {
+          const isUrlEdition = isLikelyEditionUrl(new URL(pageData.url));
+          setViewMode(isUrlEdition ? 'edition' : 'article');
+        } else {
+          setViewMode('article');
+        }
         setStatus({ state: 'ready' });
       } else if (detected) {
         // Se a página for um índice de edição sem um artigo individual longo
         setArticle(null);
+        setViewMode('edition');
         setStatus({ state: 'ready' });
       } else {
         throw new Error('Não foi detectado um artigo principal ou edição nesta página.');
@@ -258,6 +268,7 @@ export const App: React.FC = () => {
     setArticle(demo);
     setSingleTitle(demo.title);
     setSingleAuthor(demo.byline || '');
+    setViewMode('article');
     setStatus({ state: 'ready' });
   };
 
@@ -530,9 +541,39 @@ export const App: React.FC = () => {
           )}
 
           {(status.state === 'ready' || status.state === 'generating' || downloadSuccessToast || batchSuccessToast) && (
-            <div className="space-y-4">
-              {/* Card de Edição de Revista Detectada */}
-              {detectedEdition && (
+            <div className="space-y-3.5">
+              {/* Seletor Segmentado: Artigo Individual vs. Edição Completa */}
+              {article && detectedEdition && (
+                <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200 shadow-2xs">
+                  <button
+                    type="button"
+                    onClick={() => setViewMode('article')}
+                    className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                      viewMode === 'article'
+                        ? 'bg-white text-slate-900 shadow-xs border border-slate-200/80 font-bold'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    <FileText className="w-3.5 h-3.5 text-amber-500" />
+                    <span>Artigo Individual</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setViewMode('edition')}
+                    className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                      viewMode === 'edition'
+                        ? 'bg-white text-slate-900 shadow-xs border border-slate-200/80 font-bold'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    <Layers className="w-3.5 h-3.5 text-amber-500" />
+                    <span>Edição Completa ({detectedEdition.articles.length})</span>
+                  </button>
+                </div>
+              )}
+
+              {/* MODO 1: Exibição da Edição de Revista Completa */}
+              {viewMode === 'edition' && detectedEdition && (
                 <div className="bg-gradient-to-br from-amber-500/10 via-amber-500/5 to-slate-50 border border-amber-500/30 rounded-xl p-3.5 space-y-3 shadow-xs">
                   <div className="flex gap-3">
                     {/* Capa da Edição */}
@@ -605,6 +646,7 @@ export const App: React.FC = () => {
                       <span className="font-semibold text-slate-700">Matérias da Edição</span>
                       <div className="flex gap-2 text-[10px]">
                         <button
+                          type="button"
                           onClick={handleSelectAllArticles}
                           disabled={isBatchImporting}
                           className="text-amber-700 hover:text-amber-900 font-medium cursor-pointer"
@@ -613,6 +655,7 @@ export const App: React.FC = () => {
                         </button>
                         <span className="text-slate-300">•</span>
                         <button
+                          type="button"
                           onClick={handleDeselectAllArticles}
                           disabled={isBatchImporting}
                           className="text-slate-500 hover:text-slate-700 cursor-pointer"
@@ -659,6 +702,7 @@ export const App: React.FC = () => {
 
                     {/* Botão de Ação do Lote */}
                     <button
+                      type="button"
                       onClick={handleImportBatchEdition}
                       disabled={isBatchImporting || detectedEdition.articles.filter((a) => a.selected).length === 0}
                       className="w-full mt-2 py-2 px-3 bg-amber-500 hover:bg-amber-400 active:scale-[0.99] text-slate-950 rounded-lg font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition-all disabled:opacity-50 cursor-pointer"
@@ -687,9 +731,26 @@ export const App: React.FC = () => {
                 </div>
               )}
 
-              {/* Card de Artigo Individual (exibido quando não há edição ou quando há artigo detectado) */}
-              {article && !detectedEdition && (
+              {/* MODO 2: Exibição do Artigo Individual (viewMode === 'article' e artigo existente) */}
+              {viewMode === 'article' && article && (
                 <>
+                  {/* Banner discreto indicando que também há uma edição detectada */}
+                  {detectedEdition && (
+                    <div className="flex items-center justify-between p-2 bg-amber-500/10 border border-amber-500/20 rounded-lg text-xs text-amber-900">
+                      <div className="flex items-center gap-1.5 truncate pr-2">
+                        <Sparkles className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                        <span className="truncate">Edição com {detectedEdition.articles.length} matérias disponível nesta página.</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setViewMode('edition')}
+                        className="font-bold text-amber-700 hover:text-amber-900 underline shrink-0 cursor-pointer text-[11px]"
+                      >
+                        Ver Edição
+                      </button>
+                    </div>
+                  )}
+
                   {/* Card de Métricas do Artigo */}
                   <div className="flex items-center justify-between text-xs px-3 py-2 bg-slate-50 border border-slate-200/80 rounded-lg text-slate-600">
                     <div className="flex items-center gap-1.5">
@@ -741,7 +802,7 @@ export const App: React.FC = () => {
                         type="checkbox"
                         checked={includeImages}
                         onChange={(e) => setIncludeImages(e.target.checked)}
-                        className="w-4 h-4 text-amber-600 rounded border-slate-300 focus:ring-amber-500"
+                        className="w-4 h-4 text-amber-600 rounded border-slate-300 focus:ring-amber-500 cursor-pointer"
                       />
                     </div>
                     <div className="flex items-center justify-between">
@@ -750,7 +811,7 @@ export const App: React.FC = () => {
                         type="checkbox"
                         checked={addCoverPage}
                         onChange={(e) => setAddCoverPage(e.target.checked)}
-                        className="w-4 h-4 text-amber-600 rounded border-slate-300 focus:ring-amber-500"
+                        className="w-4 h-4 text-amber-600 rounded border-slate-300 focus:ring-amber-500 cursor-pointer"
                       />
                     </div>
                   </div>
@@ -774,22 +835,24 @@ export const App: React.FC = () => {
             </div>
           )}
 
-          {/* Botões de Ação do Artigo Atual (quando exibindo artigo individual) */}
-          {article && !detectedEdition && (
+          {/* Botões de Ação do Artigo Atual (quando em modo Artigo Individual) */}
+          {viewMode === 'article' && article && (
             <div className="mt-5 space-y-2 pt-3 border-t border-slate-100">
               <button
+                type="button"
                 onClick={handleAddToBook}
                 disabled={status.state === 'extracting' || status.state === 'generating'}
-                className="w-full py-2.5 px-4 bg-slate-900 hover:bg-slate-800 active:scale-[0.99] text-white rounded-lg font-semibold text-xs flex items-center justify-center gap-2 shadow-sm transition-all"
+                className="w-full py-2.5 px-4 bg-slate-900 hover:bg-slate-800 active:scale-[0.99] text-white rounded-lg font-semibold text-xs flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
               >
                 <Plus className="w-4 h-4 text-amber-400" />
                 Adicionar este Artigo ao Meu Livro (+1)
               </button>
 
               <button
+                type="button"
                 onClick={handleDownloadSingleArticle}
                 disabled={status.state === 'extracting' || status.state === 'generating'}
-                className="w-full py-2 px-3 bg-amber-500 hover:bg-amber-400 active:scale-[0.99] text-slate-950 rounded-lg font-semibold text-xs flex items-center justify-center gap-2 shadow-sm transition-all"
+                className="w-full py-2 px-3 bg-amber-500 hover:bg-amber-400 active:scale-[0.99] text-slate-950 rounded-lg font-semibold text-xs flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
               >
                 {status.state === 'generating' ? (
                   <>
