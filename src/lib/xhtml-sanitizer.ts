@@ -58,6 +58,15 @@ function cleanElement(el: Element, options: { removeImages?: boolean }): void {
       continue;
     }
 
+    // Se for img e o src ainda for externo (http/https) ou vazio, remove para não quebrar no Kindle
+    if (tagName === 'img') {
+      const src = child.getAttribute('src');
+      if (!src || src.startsWith('http://') || src.startsWith('https://')) {
+        child.remove();
+        continue;
+      }
+    }
+
     // Se for link, remover javascript: ou links vazios
     if (tagName === 'a') {
       const href = child.getAttribute('href');

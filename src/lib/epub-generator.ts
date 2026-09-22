@@ -118,6 +118,8 @@ export async function generatePublicationEpub(
     if (options.includeImages) {
       try {
         const imgResult = await extractAndProcessImages(art.contentHtml, art.url);
+        // Utilizar o HTML com imagens locais atualizadas
+        chapterHtml = imgResult.updatedHtml;
         // Prefixar imagens para evitar colisões entre capítulos
         for (const img of imgResult.images) {
           const uniquePath = `images/c${chapterNum}_${img.internalPath.replace(/^images\//, '')}`;

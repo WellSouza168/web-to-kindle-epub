@@ -38,12 +38,12 @@ async function handleFetchImage(url: string) {
   const contentType = response.headers.get('content-type') || 'image/jpeg';
   const buffer = await response.arrayBuffer();
 
-  // Converter ArrayBuffer para base64
+  // Converter ArrayBuffer para base64 em blocos para performance máxima
   let binary = '';
   const bytes = new Uint8Array(buffer);
-  const len = bytes.byteLength;
-  for (let i = 0; i < len; i++) {
-    binary += String.fromCharCode(bytes[i]);
+  const chunkSize = 8192;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunkSize)));
   }
   const base64 = btoa(binary);
 
