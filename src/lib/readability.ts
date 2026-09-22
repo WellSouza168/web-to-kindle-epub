@@ -1,5 +1,6 @@
 import { Readability } from '@mozilla/readability';
 import { ArticleMetadata } from './types';
+import { isAdDisclaimerText } from './xhtml-sanitizer';
 
 /**
  * Executa o Mozilla Readability sobre o HTML da página e extrai o artigo e metadados.
@@ -13,7 +14,10 @@ export function extractArticleFromHtml(rawHtml: string, pageUrl: string): Articl
   baseEl.href = pageUrl;
   doc.head.appendChild(baseEl);
 
-  // Identificar e marcar blocos de destaque (callouts/asides/sidebars/boxes) antes da leitura
+  // 1. Remover containers publicitários e disclaimers (ex: "Continua após a publicidade")
+  stripAdElements(doc);
+
+  // 2. Identificar e marcar blocos de destaque (callouts/asides/sidebars/boxes) antes da leitura
   const calloutSelectors = 'aside, .box, [class*="box"], [class*="callout"], [class*="destaque"], [class*="infobox"], [class*="sidebar"], [class*="wp-block-group"], [class*="quadro"]';
   const candidates = doc.querySelectorAll(calloutSelectors);
   candidates.forEach((el) => {
@@ -64,4 +68,40 @@ function extractHostname(urlStr: string): string {
   } catch {
     return 'Web';
   }
+}
+
+/**
+ * Remove blocos de propaganda, widgets de assinatura e disclaimers publicitários do documento.
+ */
+function stripAdElements(doc: Document): void {
+  // 1. Containers com classes de publicidade conhecidas
+  const adSelectors = [
+    '.ads',
+    '.ad',
+    '[class*="ads-"]',
+    '[class*="-ads"]',
+    '[class*="publicidade"]',
+    '[class*="anuncio"]',
+    '.ads-bilboards',
+    '.fixed-ad',
+    '.post-ads',
+    '.mobile-assine',
+    '.login-assine',
+    '.injected-paywall'
+  ].join(', ');
+
+  doc.querySelectorAll(adSelectors).forEach((el) => {
+    // Preservar containers raiz do artigo ou blocos editoriais já marcados
+    if (!el.matches('article, main, #main, [data-callout="true"]')) {
+      el.remove();
+    }
+  });
+
+  // 2. Elementos que contenham texto de aviso publicitário (ex: "Continua após a publicidade")
+  const textCandidates = doc.querySelectorAll('p, span, div, small, em, strong');
+  textCandidates.forEach((el) => {
+    if (isAdDisclaimerText(el.textContent || '')) {
+      el.remove();
+    }
+  });
 }

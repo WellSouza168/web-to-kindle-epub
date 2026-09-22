@@ -52,6 +52,18 @@ function cleanElement(el: Element, options: { removeImages?: boolean }): void {
       continue;
     }
 
+    // Remover disclaimers de anúncios (ex: "Continua após a publicidade", "Publicidade")
+    if (isAdDisclaimerText(child.textContent || '')) {
+      child.remove();
+      continue;
+    }
+
+    // Remover parágrafos e elementos vazios residuais
+    if ((tagName === 'p' || tagName === 'span') && !child.firstElementChild && (child.textContent || '').trim().length === 0) {
+      child.remove();
+      continue;
+    }
+
     // Se for <aside>, converter para <div class="callout-box">
     if (tagName === 'aside') {
       const div = child.ownerDocument.createElement('div');
@@ -146,4 +158,47 @@ function unwrapElement(el: Element): void {
 function fixXmlEntities(xmlString: string): string {
   // Converte & solto que não faz parte de entidade válida para &amp;
   return xmlString.replace(/&(?!(amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)/g, '&amp;');
+}
+
+/**
+ * Identifica frases e disclaimers publicitários injetados no meio do texto das matérias.
+ */
+export function isAdDisclaimerText(rawText: string): boolean {
+  if (!rawText) return false;
+
+  // Normalizar espaços e remover pontuações comuns nas extremidades (ex: "— Continua após a publicidade —")
+  const text = rawText
+    .trim()
+    .toLowerCase()
+    .replace(/^[-—–\[\(\s*]+|[-—–\]\)\s*.]+$/g, '')
+    .trim();
+
+  if (!text) return false;
+
+  const exactDisclaimers = [
+    'continua após a publicidade',
+    'continua depois da publicidade',
+    'continua após o anúncio',
+    'continua depois do anúncio',
+    'continua após a propaganda',
+    'continua depois da propaganda',
+    'publicidade',
+    'anúncio',
+    'anuncio',
+    'propaganda',
+    'advertisement',
+    'sponsored',
+    'conteúdo patrocinado'
+  ];
+
+  if (exactDisclaimers.includes(text)) {
+    return true;
+  }
+
+  // Padrão flexível: "continua (após|depois) (da|de|a|o)? (publicidade|anúncio|propaganda)"
+  if (/^continua\s+(após|depois)\s+(a|o|da|do)?\s*(publicidade|anúncio|anuncio|propaganda)/i.test(text)) {
+    return true;
+  }
+
+  return false;
 }
