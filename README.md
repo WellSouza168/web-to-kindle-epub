@@ -1,57 +1,73 @@
 # 📚 Web to Kindle EPUB (Extensão de Navegador)
 
-Extensão de navegador (Manifest V3) que transforma artigos da web em arquivos `.epub` perfeitamente limpos, diagramados e otimizados para leitura no Kindle (via **Amazon Send to Kindle**).
+Extensão de navegador (Manifest V3) que transforma artigos da web em arquivos `.epub` perfeitamente diagramados e otimizados para leitura no Kindle (via **Amazon Send to Kindle**).
+
+Suporta tanto a conversão de **artigos individuais** quanto a criação de **livros/revistas completos (Estilo Passages)** com múltiplos artigos agrupados em capítulos, capa de alta resolução e sumário interativo.
 
 ---
 
 ## ✨ Funcionalidades
 
-- **Extração com Mozilla Readability:** Isola o artigo eliminando propagandas, barras laterais, popups de newsletter e menus.
-- **Formatação Otimizada para E-Ink:** Tipografia em escala com fontes legíveis (Bookerly / Georgia), entrelinhamento e margens ajustadas para telas de e-ink.
-- **Tratamento Inteligente de Imagens:** Baixa e redimensiona as imagens do artigo, convertendo para JPEG padrão e embutindo no arquivo (com opção de desativar para gerar arquivos ultraleves).
-- **Capa Tipográfica Elegante:** Gera uma capa com o título, autor, veículo original, data e tempo estimado de leitura.
-- **100% Client-Side:** Todo o processamento ocorre no próprio navegador. Zero dados enviados para servidores externos, privacidade total e custo zero.
-- **Compatibilidade Rigorosa com o Kindle:**
-  - `mimetype` uncomprimido na primeira posição do pacote ZIP.
-  - Especificação mista **EPUB 3 + EPUB 2 (NCX)** para compatibilidade em qualquer geração de Kindle (Paperwhite, Oasis, Scribe, app móvel).
-  - Sanitização estrita de XHTML para evitar rejeição no serviço Send to Kindle da Amazon.
+### 📖 1. Modo Livro / Revista (Estilo Passages)
+- **Compilador de Artigos:** Colete matérias enquanto navega na internet e monte edições digitais temáticas (ex: *Edição Freud*, *Série de Tecnologia*, *Revista Semanal*).
+- **Capítulos Divididos:** Cada matéria é gravada como um capítulo independente (`Capítulo 01 • Título`), permitindo navegar pelos marcadores de capítulo na barra de leitura do Kindle.
+- **Reordenação Flexível:** Use as setas `↑` e `↓` para definir a ordem exata de leitura antes de baixar.
+- **Sumário Duplo (EPUB 3 + NCX):** Compatibilidade total com todas as gerações de leitores Kindle (Paperwhite, Oasis, Scribe, apps iOS/Android).
+- **Capa Customizável para o Kindle:**
+  - **Temas Tipográficos:** *Passages Dark (Noir)*, *Classic Editorial* e *Minimal Slate*.
+  - **Upload de Imagem Própria:** Escolha qualquer imagem do seu computador para estampar a capa.
+  - **Exibição na Tela de Bloqueio:** Capa registrada como `cover-image` para que o Kindle mostre o livro na grade da biblioteca e na tela de descanso.
+- **Métricas Consolidadas:** Exibe total de artigos, tempo somado de leitura (ex: `2h 55m`) e total de palavras.
 
 ---
 
-## 🚀 Como Instalar no Google Chrome / Microsoft Edge / Brave
+### 📄 2. Modo Artigo Individual
+- **Leitura Rápida em 1 Clique:** Baixe imediatamente o artigo que você está lendo com título e autor formatados.
+- **Botão "+ Adicionar ao Meu Livro":** Adicione o artigo para ler mais tarde na sua coletânea sem interromper sua navegação.
+
+---
+
+### ⚡ 3. Engenharia e Otimização para E-Ink
+- **Motor Mozilla Readability:** Isola o texto relevante e remove popups, anúncios, caixas de comentários e barras de navegação.
+- **Tratamento de Imagens:** Baixa e otimiza imagens em JPEG padrão (85%), redimensiona gráficos gigantes e ignora rastreadores invisíveis (<30px).
+- **100% Client-Side:** Todo o processamento ocorre no próprio navegador, garantindo privacidade absoluta e zero servidores externos.
+
+---
+
+## 🚀 Como Instalar no Chrome / Edge / Brave
 
 1. Abra o navegador e acesse a página de extensões:
-   - **Google Chrome:** `chrome://extensions`
-   - **Microsoft Edge:** `edge://extensions`
+   - **Chrome:** `chrome://extensions`
+   - **Edge:** `edge://extensions`
    - **Brave:** `brave://extensions`
-2. Ative a chave **"Modo do desenvolvedor"** (canto superior direito).
-3. Clique no botão **"Carregar sem compactação"** (ou *"Load unpacked"*).
-4. Selecione a pasta **`dist`** que está dentro deste projeto:
+2. Ative o **Modo do desenvolvedor** (canto superior direito).
+3. Clique em **"Carregar sem compactação"** (*Load unpacked*).
+4. Selecione a pasta **`dist`** deste repositório:
    ```
    c:\Users\Well_\Documents\antigravity\modest-turing\dist
    ```
-5. A extensão **Web to Kindle EPUB** estará instalada e pronta para uso! Fixe o ícone na barra de ferramentas para acesso rápido.
+5. A extensão estará instalada! Fixe o ícone na barra de navegação para acesso rápido.
 
 ---
 
-## 📖 Como Usar
+## 📖 Como Montar seu Livro (Passo a Passo)
 
-1. Navegue até qualquer artigo de interesse na internet (notícias, blogs, Medium, Wikipedia, etc.).
-2. Clique no ícone da extensão na barra do navegador.
-3. O popup exibirá automaticamente:
-   - Título e autor (editáveis).
-   - Tempo estimado de leitura e contagem de palavras.
-   - Opções para incluir imagens e gerar capa.
-4. Clique em **"Baixar EPUB para Kindle"**.
-5. Para enviar ao Kindle:
-   - Clique em **"Abrir Amazon Send to Kindle Web"** direto no popup.
-   - Arraste o arquivo `.epub` baixado para a página da Amazon.
-   - Em poucos segundos, o artigo estará sincronizado no seu dispositivo Kindle com capa, sumário e imagens!
+1. Acesse o primeiro artigo na web e clique no ícone da extensão.
+2. Clique no botão **"Adicionar este Artigo ao Meu Livro (+1)"**.
+   - Note que o ícone da extensão exibirá um contador com a quantidade de artigos salvos.
+3. Repita o processo nos demais artigos que deseja incluir na sua edição.
+4. Clique na aba **"Meu Livro / Revista"**:
+   - Dê um **Título** (ex: *Freud*) e um **Subtítulo** (ex: *Para entender de uma vez*).
+   - Escolha o estilo da capa ou carregue uma imagem.
+   - Ajuste a ordem dos capítulos com as setas `↑` e `↓`.
+5. Clique em **"Baixar Livro Completo para Kindle"**.
+6. Clique em **"Amazon Send to Kindle"** e arraste o arquivo `.epub` gerado!
 
 ---
 
 ## 🛠️ Comandos de Desenvolvimento
 
-- **Instalar dependências:** `npm install`
+- **Instalar:** `npm install`
 - **Compilar para produção:** `npm run build`
-- **Testar estrutura do EPUB:** `node scripts/test-epub-structure.js`
+- **Testar EPUB individual:** `node scripts/test-epub-structure.js`
+- **Testar EPUB multi-capítulos:** `node scripts/test-multi-chapter-epub.js`

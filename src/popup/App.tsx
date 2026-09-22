@@ -1,62 +1,113 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   BookOpen,
+  FileText,
   Download,
   ExternalLink,
   Clock,
-  FileText,
-  Image as ImageIcon,
   CheckCircle2,
   AlertCircle,
   Loader2,
   RefreshCw,
-  Bookmark
+  Plus,
+  ArrowUp,
+  ArrowDown,
+  Trash2,
+  Upload,
+  BookMarked,
+  Sparkles,
+  Layers,
+  Image as ImageIcon
 } from 'lucide-react';
-import { ArticleMetadata, ExtractionStatus } from '../lib/types';
+import { ArticleMetadata, BookPublication, CoverTheme, ExtractionStatus } from '../lib/types';
 import { extractArticleFromHtml } from '../lib/readability';
 import { extractAndProcessImages } from '../lib/image-fetcher';
-import { generateKindleEpub } from '../lib/epub-generator';
+import { generateKindleEpub, generatePublicationEpub } from '../lib/epub-generator';
+import { generateBookCover } from '../lib/cover-generator';
+import {
+  loadPublication,
+  savePublication,
+  addArticleToPublication,
+  removeArticleFromPublication,
+  reorderArticlesInPublication,
+  clearPublication,
+  DEFAULT_PUBLICATION
+} from '../lib/book-storage';
 
 export const App: React.FC = () => {
+  // Controle de abas: 'current' (Artigo Atual) ou 'book' (Meu Livro / Coletânea)
+  const [activeTab, setActiveTab] = useState<'current' | 'book'>('current');
+
+  // Estado do Artigo Atual
   const [article, setArticle] = useState<ArticleMetadata | null>(null);
   const [status, setStatus] = useState<ExtractionStatus>({ state: 'extracting', progressMessage: 'Analisando artigo na página...' });
-  const [title, setTitle] = useState('');
-  const [author, setAuthor] = useState('');
+  const [singleTitle, setSingleTitle] = useState('');
+  const [singleAuthor, setSingleAuthor] = useState('');
   const [includeImages, setIncludeImages] = useState(true);
   const [addCoverPage, setAddCoverPage] = useState(true);
-  const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
-  const [downloadSuccess, setDownloadSuccess] = useState(false);
 
-  // Extrair artigo da aba ativa ao abrir
+  // Estado da Coletânea / Livro
+  const [publication, setPublication] = useState<BookPublication>(DEFAULT_PUBLICATION);
+  const [coverPreviewUrl, setCoverPreviewUrl] = useState<string>('');
+  const [bookProgress, setBookProgress] = useState<{ current: number; total: number; message: string } | null>(null);
+
+  // Notificações / Feedbacks
+  const [addedSuccessToast, setAddedSuccessToast] = useState(false);
+  const [downloadSuccessToast, setDownloadSuccessToast] = useState(false);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Inicialização
   useEffect(() => {
     extractContentFromActiveTab();
+    refreshPublication();
   }, []);
+
+  // Atualizar preview da capa sempre que a publicação mudar
+  useEffect(() => {
+    let isMounted = true;
+    generateBookCover(publication, publication.cover)
+      .then((res) => {
+        if (isMounted) setCoverPreviewUrl(res.dataUrl);
+      })
+      .catch(() => {});
+    return () => {
+      isMounted = false;
+    };
+  }, [publication.title, publication.subtitle, publication.author, publication.cover, publication.articles.length]);
+
+  const refreshPublication = async () => {
+    const loaded = await loadPublication();
+    setPublication(loaded);
+  };
 
   const extractContentFromActiveTab = async () => {
     setStatus({ state: 'extracting', progressMessage: 'Lendo conteúdo da página atual...' });
-    setDownloadSuccess(false);
+    setDownloadSuccessToast(false);
 
     try {
-      if (!chrome?.tabs?.query) {
-        // Modo de demonstração fora do navegador de extensão
+      if (typeof chrome === 'undefined' || !chrome.tabs?.query) {
         loadDemoArticle();
         return;
       }
 
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      const activeTab = tabs[0];
+      const activeTabInfo = tabs[0];
 
-      if (!activeTab || !activeTab.id || !activeTab.url) {
+      if (!activeTabInfo || !activeTabInfo.id || !activeTabInfo.url) {
         throw new Error('Não foi possível identificar a aba ativa.');
       }
 
-      if (activeTab.url.startsWith('chrome://') || activeTab.url.startsWith('edge://') || activeTab.url.startsWith('about:')) {
+      if (
+        activeTabInfo.url.startsWith('chrome://') ||
+        activeTabInfo.url.startsWith('edge://') ||
+        activeTabInfo.url.startsWith('about:')
+      ) {
         throw new Error('Páginas de sistema do navegador não podem ser convertidas em artigos.');
       }
 
-      // Injeta uma pequena função para obter o HTML e metadados da página
       const results = await chrome.scripting.executeScript({
-        target: { tabId: activeTab.id },
+        target: { tabId: activeTabInfo.id },
         func: () => ({
           html: document.documentElement.outerHTML,
           url: window.location.href,
@@ -71,12 +122,12 @@ export const App: React.FC = () => {
 
       const parsed = extractArticleFromHtml(pageData.html, pageData.url);
       if (!parsed) {
-        throw new Error('Não foi detectado um artigo principal legível nesta página. Tente em páginas com artigos de texto ou notícias.');
+        throw new Error('Não foi detectado um artigo principal nesta página.');
       }
 
       setArticle(parsed);
-      setTitle(parsed.title);
-      setAuthor(parsed.byline || parsed.siteName || '');
+      setSingleTitle(parsed.title);
+      setSingleAuthor(parsed.byline || parsed.siteName || '');
       setStatus({ state: 'ready' });
     } catch (err: any) {
       setStatus({
@@ -87,61 +138,66 @@ export const App: React.FC = () => {
   };
 
   const loadDemoArticle = () => {
-    const demoArticle: ArticleMetadata = {
-      title: 'A Revolução da Leitura Digital e a Tela E-Ink',
-      byline: 'Equipe de Tecnologia',
-      siteName: 'TecnoBlog Exemplo',
-      excerpt: 'Como a tecnologia de tinta eletrônica transformou a experiência de leitura em dispositivos portáteis.',
-      url: 'https://exemplo.com.br/artigo-eink',
-      readingTimeMinutes: 5,
-      wordCount: 1150,
+    const demo: ArticleMetadata = {
+      title: 'Inconsciente – O iceberg sob a água',
+      byline: 'Revista Super',
+      siteName: 'super.abril.com.br',
+      excerpt: 'Como a descoberta do inconsciente transformou a compreensão da mente humana.',
+      url: 'https://super.abril.com.br/historia/inconsciente-o-iceberg-sob-a-agua',
+      readingTimeMinutes: 26,
+      wordCount: 4200,
       contentHtml: `
-        <p>A tecnologia e-ink (tinta eletrônica) revolucionou a forma como consumimos textos longos.</p>
-        <h2>Vantagens do E-Ink</h2>
-        <p>Ao contrário das telas LCD e OLED convencionais, o e-ink reflete a luz ambiente em vez de emitir luz diretamente nos olhos do leitor, eliminando o cansaço visual após horas contínuas de leitura.</p>
-        <blockquote>"Ler em um dispositivo e-ink é a experiência que mais se aproxima do papel físico."</blockquote>
-        <p>Com a conversão direta de artigos da web para o formato EPUB, você pode acumular os melhores ensaios e reportagens para desfrutar com foco e sem distrações.</p>
+        <p>A mente humana guarda segredos profundos que Freud comparou a um iceberg: a maior parte permanece oculta sob a superfície d'água.</p>
+        <h2>O Princípio do Prazer</h2>
+        <p>Nossos impulsos mais primitivos buscam gratificação imediata, moldando nossas ações de maneiras sutis.</p>
+        <blockquote>"O ego não é o senhor em sua própria casa." — Sigmund Freud</blockquote>
+        <p>A teoria psicanalítica continua influenciando a arte, a literatura e a compreensão moderna de quem somos.</p>
       `,
-      textContent: 'A tecnologia e-ink revolucionou...'
+      textContent: 'A mente humana guarda segredos profundos...'
     };
-    setArticle(demoArticle);
-    setTitle(demoArticle.title);
-    setAuthor(demoArticle.byline || '');
+    setArticle(demo);
+    setSingleTitle(demo.title);
+    setSingleAuthor(demo.byline || '');
     setStatus({ state: 'ready' });
   };
 
-  const handleGenerateEpub = async () => {
+  // Ação: Adicionar artigo atual à coletânea do livro
+  const handleAddToBook = async () => {
+    if (!article) return;
+    const updated = await addArticleToPublication({
+      ...article,
+      title: singleTitle.trim() || article.title,
+      byline: singleAuthor.trim() || article.byline
+    });
+    setPublication(updated);
+    setAddedSuccessToast(true);
+    setTimeout(() => setAddedSuccessToast(false), 3000);
+  };
+
+  // Ação: Baixar artigo único
+  const handleDownloadSingleArticle = async () => {
     if (!article) return;
 
     setStatus({ state: 'generating', progressMessage: 'Processando artigo...' });
-    setProgress(null);
-    setDownloadSuccess(false);
+    setDownloadSuccessToast(false);
 
     try {
       let finalImages: any[] = [];
       let finalHtml = article.contentHtml;
 
-      // 1. Processar imagens se habilitado
       if (includeImages) {
-        setStatus({ state: 'generating', progressMessage: 'Baixando e otimizando imagens...' });
-        const imgResult = await extractAndProcessImages(
-          article.contentHtml,
-          article.url,
-          (current, total) => {
-            setProgress({ current, total });
-          }
-        );
+        setStatus({ state: 'generating', progressMessage: 'Otimizando imagens...' });
+        const imgResult = await extractAndProcessImages(article.contentHtml, article.url);
         finalImages = imgResult.images;
         finalHtml = imgResult.updatedHtml;
       }
 
-      // 2. Gerar EPUB
-      setStatus({ state: 'generating', progressMessage: 'Empacotando arquivo EPUB para Kindle...' });
+      setStatus({ state: 'generating', progressMessage: 'Criando arquivo EPUB para Kindle...' });
       const epubBlob = await generateKindleEpub(
         { ...article, contentHtml: finalHtml },
         {
-          title: title.trim() || article.title,
-          author: author.trim() || 'Autor Desconhecido',
+          title: singleTitle.trim() || article.title,
+          author: singleAuthor.trim() || 'Autor Desconhecido',
           includeImages,
           addCoverPage,
           language: 'pt'
@@ -149,271 +205,633 @@ export const App: React.FC = () => {
         finalImages
       );
 
-      // 3. Fazer download do arquivo
-      const safeTitle = (title.trim() || 'artigo')
-        .replace(/[\\/:*?"<>|]/g, '')
-        .substring(0, 60)
-        .trim();
-      const filename = `${safeTitle}.epub`;
-
-      const downloadUrl = URL.createObjectURL(epubBlob);
-
-      // Usar a API de downloads se disponível, senão fallback para link de download
-      if (chrome?.downloads?.download) {
-        chrome.downloads.download({
-          url: downloadUrl,
-          filename: filename,
-          saveAs: false
-        }, () => {
-          setStatus({ state: 'ready' });
-          setDownloadSuccess(true);
-        });
-      } else {
-        const a = document.createElement('a');
-        a.href = downloadUrl;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setStatus({ state: 'ready' });
-        setDownloadSuccess(true);
-      }
+      triggerDownload(epubBlob, `${(singleTitle.trim() || 'artigo').replace(/[\\/:*?"<>|]/g, '')}.epub`);
+      setStatus({ state: 'ready' });
+      setDownloadSuccessToast(true);
     } catch (err: any) {
-      setStatus({
-        state: 'error',
-        errorMessage: `Erro ao gerar EPUB: ${err.message || 'Falha desconhecida.'}`
-      });
+      setStatus({ state: 'error', errorMessage: err.message || 'Falha ao gerar EPUB.' });
     }
   };
 
-  const handleOpenSendToKindle = () => {
-    const url = 'https://www.amazon.com/sendtokindle';
-    if (chrome?.tabs?.create) {
-      chrome.tabs.create({ url });
-    } else {
-      window.open(url, '_blank');
+  // Ação: Baixar livro completo com múltiplos capítulos
+  const handleDownloadFullBook = async () => {
+    if (publication.articles.length === 0) return;
+
+    setStatus({ state: 'generating', progressMessage: 'Iniciando compilação do livro...' });
+    setDownloadSuccessToast(false);
+    setBookProgress(null);
+
+    try {
+      // 1. Gerar imagem de capa em alta resolução (JPEG 1200x1800)
+      const cover = await generateBookCover(publication, publication.cover);
+
+      // 2. Gerar o EPUB multi-capítulos
+      const epubBlob = await generatePublicationEpub(
+        publication,
+        cover.data,
+        { includeImages },
+        (current, total, message) => {
+          setBookProgress({ current, total, message });
+        }
+      );
+
+      // 3. Fazer download
+      const safeTitle = (publication.title.trim() || 'Livro-Coletanea')
+        .replace(/[\\/:*?"<>|]/g, '')
+        .substring(0, 60);
+      triggerDownload(epubBlob, `${safeTitle}.epub`);
+
+      setStatus({ state: 'ready' });
+      setBookProgress(null);
+      setDownloadSuccessToast(true);
+    } catch (err: any) {
+      setStatus({ state: 'error', errorMessage: err.message || 'Falha ao compilar livro.' });
+      setBookProgress(null);
     }
   };
+
+  const triggerDownload = (blob: Blob, filename: string) => {
+    const downloadUrl = URL.createObjectURL(blob);
+    if (typeof chrome !== 'undefined' && chrome.downloads?.download) {
+      chrome.downloads.download({
+        url: downloadUrl,
+        filename,
+        saveAs: false
+      });
+    } else {
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+  };
+
+  // Reordenação de capítulos
+  const handleMoveUp = async (index: number) => {
+    if (index === 0) return;
+    const updated = await reorderArticlesInPublication(index, index - 1);
+    setPublication(updated);
+  };
+
+  const handleMoveDown = async (index: number) => {
+    if (index === publication.articles.length - 1) return;
+    const updated = await reorderArticlesInPublication(index, index + 1);
+    setPublication(updated);
+  };
+
+  const handleRemoveArticle = async (id: string) => {
+    const updated = await removeArticleFromPublication(id);
+    setPublication(updated);
+  };
+
+  const handleClearBook = async () => {
+    if (confirm('Tem certeza que deseja limpar todos os artigos da coletânea atual?')) {
+      const cleared = await clearPublication();
+      setPublication(cleared);
+    }
+  };
+
+  // Upload de Imagem de Capa Customizada
+  const handleCoverUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const dataUrl = event.target?.result as string;
+      const updated = {
+        ...publication,
+        cover: {
+          type: 'custom' as const,
+          presetTheme: publication.cover.presetTheme,
+          customImageDataUrl: dataUrl
+        }
+      };
+      setPublication(updated);
+      await savePublication(updated);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSelectPresetTheme = async (theme: CoverTheme) => {
+    const updated = {
+      ...publication,
+      cover: {
+        type: 'preset' as const,
+        presetTheme: theme,
+        customImageDataUrl: undefined
+      }
+    };
+    setPublication(updated);
+    await savePublication(updated);
+  };
+
+  // Cálculos de totais
+  const totalReadingTime = publication.articles.reduce((acc, a) => acc + a.readingTimeMinutes, 0);
+  const formattedReadingTime =
+    totalReadingTime >= 60
+      ? `${Math.floor(totalReadingTime / 60)}h ${totalReadingTime % 60 > 0 ? (totalReadingTime % 60) + 'm' : ''}`
+      : `${totalReadingTime}m`;
+
+  const totalWords = publication.articles.reduce((acc, a) => acc + a.wordCount, 0);
 
   return (
-    <div className="flex flex-col min-h-[520px] bg-white text-slate-800">
-      {/* Header */}
-      <header className="px-5 py-4 border-b border-slate-100 bg-slate-900 text-white flex items-center justify-between">
-        <div className="flex items-center space-x-2.5">
-          <div className="p-1.5 bg-amber-500 rounded-lg text-slate-950 font-bold">
-            <BookOpen className="w-5 h-5" />
+    <div className="flex flex-col min-h-[580px] bg-white text-slate-800">
+      {/* Header Principal com Abas */}
+      <header className="px-5 pt-3 pb-0 bg-slate-950 text-white border-b border-slate-800">
+        <div className="flex items-center justify-between pb-3">
+          <div className="flex items-center space-x-2.5">
+            <div className="p-1.5 bg-amber-500 rounded-lg text-slate-950 font-bold">
+              <BookOpen className="w-4 h-4" />
+            </div>
+            <div>
+              <h1 className="text-sm font-bold tracking-tight text-white flex items-center gap-1.5">
+                Web to Kindle
+                <span className="text-[10px] uppercase font-semibold tracking-wider bg-amber-500/20 text-amber-300 px-1.5 py-0.2 rounded border border-amber-500/30">
+                  EPUB
+                </span>
+              </h1>
+            </div>
           </div>
-          <div>
-            <h1 className="text-base font-bold tracking-tight text-white flex items-center gap-1.5">
-              Web to Kindle
-              <span className="text-[10px] uppercase font-semibold tracking-wider bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded border border-amber-500/30">
-                EPUB
-              </span>
-            </h1>
-            <p className="text-xs text-slate-400">Leitura confortável no seu Kindle</p>
-          </div>
+
+          <button
+            onClick={extractContentFromActiveTab}
+            disabled={status.state === 'extracting' || status.state === 'generating'}
+            title="Recarregar artigo da aba ativa"
+            className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-md transition-colors"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${status.state === 'extracting' ? 'animate-spin' : ''}`} />
+          </button>
         </div>
 
-        <button
-          onClick={extractContentFromActiveTab}
-          disabled={status.state === 'extracting' || status.state === 'generating'}
-          title="Recarregar análise da página"
-          className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-md transition-colors"
-        >
-          <RefreshCw className={`w-4 h-4 ${status.state === 'extracting' ? 'animate-spin' : ''}`} />
-        </button>
+        {/* Abas de Navegação */}
+        <div className="flex space-x-1 border-t border-slate-800/80 pt-1">
+          <button
+            onClick={() => setActiveTab('current')}
+            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold border-b-2 transition-all ${
+              activeTab === 'current'
+                ? 'border-amber-500 text-amber-400'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <FileText className="w-3.5 h-3.5" />
+            <span>Artigo Atual</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('book')}
+            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold border-b-2 transition-all ${
+              activeTab === 'book'
+                ? 'border-amber-500 text-amber-400'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <BookMarked className="w-3.5 h-3.5" />
+            <span>Meu Livro / Revista</span>
+            {publication.articles.length > 0 && (
+              <span className="ml-1 bg-amber-500 text-slate-950 font-bold px-1.5 py-0.2 rounded-full text-[10px]">
+                {publication.articles.length}
+              </span>
+            )}
+          </button>
+        </div>
       </header>
 
-      {/* Main Content Area */}
-      <div className="p-5 flex-1 flex flex-col justify-between">
-        {/* Loading State */}
-        {status.state === 'extracting' && (
-          <div className="flex-1 flex flex-col items-center justify-center py-12 text-center">
-            <Loader2 className="w-10 h-10 text-amber-500 animate-spin mb-3" />
-            <p className="text-sm font-medium text-slate-700">{status.progressMessage}</p>
-            <p className="text-xs text-slate-400 mt-1">Limpando anúncios, barras laterais e formatação...</p>
-          </div>
-        )}
-
-        {/* Error State */}
-        {status.state === 'error' && (
-          <div className="flex-1 flex flex-col items-center justify-center py-8 text-center">
-            <div className="p-3 bg-red-50 text-red-600 rounded-full mb-3">
-              <AlertCircle className="w-8 h-8" />
+      {/* Conteúdo da Aba 1: Artigo Atual */}
+      {activeTab === 'current' && (
+        <div className="p-5 flex-1 flex flex-col justify-between">
+          {status.state === 'extracting' && (
+            <div className="flex-1 flex flex-col items-center justify-center py-12 text-center">
+              <Loader2 className="w-9 h-9 text-amber-500 animate-spin mb-3" />
+              <p className="text-xs font-medium text-slate-700">{status.progressMessage}</p>
+              <p className="text-[11px] text-slate-400 mt-1">Limpando banners, propagandas e barras laterais...</p>
             </div>
-            <h3 className="text-sm font-semibold text-slate-800 mb-1">Não foi possível extrair o artigo</h3>
-            <p className="text-xs text-slate-500 max-w-xs leading-relaxed mb-4">
-              {status.errorMessage}
-            </p>
-            <button
-              onClick={extractContentFromActiveTab}
-              className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors flex items-center gap-1.5"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              Tentar Novamente
-            </button>
-          </div>
-        )}
+          )}
 
-        {/* Ready / Success / Generating States */}
-        {(status.state === 'ready' || status.state === 'generating' || downloadSuccess) && article && (
-          <div className="space-y-4">
-            {/* Metadata Stats Card */}
-            <div className="flex items-center justify-between text-xs px-3 py-2 bg-slate-50 border border-slate-200/70 rounded-lg text-slate-600">
-              <div className="flex items-center gap-1.5">
-                <Clock className="w-3.5 h-3.5 text-amber-600" />
-                <span><strong>{article.readingTimeMinutes} min</strong> de leitura</span>
+          {status.state === 'error' && (
+            <div className="flex-1 flex flex-col items-center justify-center py-8 text-center">
+              <div className="p-3 bg-red-50 text-red-600 rounded-full mb-3">
+                <AlertCircle className="w-7 h-7" />
               </div>
-              <div className="text-slate-300">•</div>
-              <div className="flex items-center gap-1.5">
-                <FileText className="w-3.5 h-3.5 text-slate-400" />
-                <span>{article.wordCount.toLocaleString('pt-BR')} palavras</span>
-              </div>
-              <div className="text-slate-300">•</div>
-              <div className="truncate max-w-[120px] font-medium text-slate-500" title={article.siteName || ''}>
-                {article.siteName || 'Web'}
-              </div>
+              <h3 className="text-xs font-semibold text-slate-800 mb-1">Não foi possível extrair o artigo</h3>
+              <p className="text-[11px] text-slate-500 max-w-xs leading-relaxed mb-4">
+                {status.errorMessage}
+              </p>
+              <button
+                onClick={extractContentFromActiveTab}
+                className="px-3.5 py-1.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors flex items-center gap-1.5"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                Tentar Novamente
+              </button>
             </div>
+          )}
 
-            {/* Editable Fields */}
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Título do Livro/Artigo
-                </label>
-                <input
-                  type="text"
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  disabled={status.state === 'generating'}
-                  placeholder="Título do artigo"
-                  className="w-full text-xs font-medium px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/40 focus:border-amber-500 transition-all bg-white"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Autor / Veículo
-                </label>
-                <input
-                  type="text"
-                  value={author}
-                  onChange={(e) => setAuthor(e.target.value)}
-                  disabled={status.state === 'generating'}
-                  placeholder="Nome do autor ou publicação"
-                  className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/40 focus:border-amber-500 transition-all bg-white"
-                />
-              </div>
-            </div>
-
-            {/* Formatting Options */}
-            <div className="pt-2 border-t border-slate-100 space-y-2.5">
-              <div className="flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2 text-slate-700 font-medium">
-                  <ImageIcon className="w-4 h-4 text-slate-400" />
-                  <span>Embutir imagens do artigo</span>
+          {(status.state === 'ready' || status.state === 'generating' || downloadSuccessToast) && article && (
+            <div className="space-y-4">
+              {/* Card de Métricas do Artigo */}
+              <div className="flex items-center justify-between text-xs px-3 py-2 bg-slate-50 border border-slate-200/80 rounded-lg text-slate-600">
+                <div className="flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-amber-600" />
+                  <span><strong>{article.readingTimeMinutes} min</strong></span>
                 </div>
-                <label className="relative inline-flex items-center cursor-pointer">
+                <div className="text-slate-300">•</div>
+                <div>{article.wordCount.toLocaleString('pt-BR')} palavras</div>
+                <div className="text-slate-300">•</div>
+                <div className="truncate max-w-[130px] font-medium text-slate-500" title={article.siteName || ''}>
+                  {article.siteName || 'Web'}
+                </div>
+              </div>
+
+              {/* Campos Editáveis */}
+              <div className="space-y-2.5">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                    Título do Artigo
+                  </label>
+                  <input
+                    type="text"
+                    value={singleTitle}
+                    onChange={(e) => setSingleTitle(e.target.value)}
+                    disabled={status.state === 'generating'}
+                    className="w-full text-xs font-medium px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/40 focus:border-amber-500 bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                    Autor / Veículo Original
+                  </label>
+                  <input
+                    type="text"
+                    value={singleAuthor}
+                    onChange={(e) => setSingleAuthor(e.target.value)}
+                    disabled={status.state === 'generating'}
+                    className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/40 focus:border-amber-500 bg-white"
+                  />
+                </div>
+              </div>
+
+              {/* Opções */}
+              <div className="pt-2 border-t border-slate-100 space-y-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-700 font-medium">Embutir imagens no EPUB</span>
                   <input
                     type="checkbox"
                     checked={includeImages}
                     onChange={(e) => setIncludeImages(e.target.checked)}
-                    disabled={status.state === 'generating'}
-                    className="sr-only peer"
+                    className="w-4 h-4 text-amber-600 rounded border-slate-300 focus:ring-amber-500"
                   />
-                  <div className="w-8 h-4 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-amber-500"></div>
-                </label>
-              </div>
-
-              <div className="flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2 text-slate-700 font-medium">
-                  <Bookmark className="w-4 h-4 text-slate-400" />
-                  <span>Gerar capa tipográfica elegante</span>
                 </div>
-                <label className="relative inline-flex items-center cursor-pointer">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-700 font-medium">Gerar página inicial de capa</span>
                   <input
                     type="checkbox"
                     checked={addCoverPage}
                     onChange={(e) => setAddCoverPage(e.target.checked)}
-                    disabled={status.state === 'generating'}
-                    className="sr-only peer"
+                    className="w-4 h-4 text-amber-600 rounded border-slate-300 focus:ring-amber-500"
                   />
-                  <div className="w-8 h-4 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-amber-500"></div>
-                </label>
-              </div>
-            </div>
-
-            {/* Generating Progress Bar */}
-            {status.state === 'generating' && (
-              <div className="p-3 bg-amber-50 border border-amber-200/80 rounded-lg text-amber-900 text-xs space-y-2 animate-pulse">
-                <div className="flex items-center justify-between font-medium">
-                  <span className="flex items-center gap-1.5">
-                    <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-600" />
-                    {status.progressMessage}
-                  </span>
-                  {progress && (
-                    <span>{progress.current} / {progress.total}</span>
-                  )}
                 </div>
-                {progress && (
+              </div>
+
+              {/* Toasts / Feedback */}
+              {addedSuccessToast && (
+                <div className="p-2.5 bg-amber-50 border border-amber-200 text-amber-900 rounded-lg text-xs flex items-center gap-2 animate-bounce">
+                  <Sparkles className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>Artigo adicionado com sucesso à sua coletânea!</span>
+                </div>
+              )}
+
+              {downloadSuccessToast && (
+                <div className="p-2.5 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-lg text-xs flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>Download do EPUB concluído! Salvo em Downloads.</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Botões de Ação do Artigo Atual */}
+          <div className="mt-5 space-y-2 pt-3 border-t border-slate-100">
+            <button
+              onClick={handleAddToBook}
+              disabled={!article || status.state === 'extracting' || status.state === 'generating'}
+              className="w-full py-2.5 px-4 bg-slate-900 hover:bg-slate-800 active:scale-[0.99] text-white rounded-lg font-semibold text-xs flex items-center justify-center gap-2 shadow-sm transition-all"
+            >
+              <Plus className="w-4 h-4 text-amber-400" />
+              Adicionar este Artigo ao Meu Livro (+1)
+            </button>
+
+            <button
+              onClick={handleDownloadSingleArticle}
+              disabled={!article || status.state === 'extracting' || status.state === 'generating'}
+              className="w-full py-2 px-3 bg-amber-500 hover:bg-amber-400 active:scale-[0.99] text-slate-950 rounded-lg font-semibold text-xs flex items-center justify-center gap-2 shadow-sm transition-all"
+            >
+              {status.state === 'generating' ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Gerando EPUB...
+                </>
+              ) : (
+                <>
+                  <Download className="w-3.5 h-3.5" />
+                  Baixar Apenas este Artigo Individual
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Conteúdo da Aba 2: Meu Livro / Coletânea (Estilo Passages) */}
+      {activeTab === 'book' && (
+        <div className="p-5 flex-1 flex flex-col justify-between">
+          {publication.articles.length === 0 ? (
+            <div className="flex-1 flex flex-col items-center justify-center py-12 text-center">
+              <div className="p-4 bg-amber-50 text-amber-600 rounded-full mb-3">
+                <Layers className="w-8 h-8" />
+              </div>
+              <h3 className="text-xs font-bold text-slate-800 mb-1">Seu Livro está Vazio</h3>
+              <p className="text-[11px] text-slate-500 max-w-xs leading-relaxed mb-5">
+                Navegue pelos seus artigos ou reportagens favoritas e clique em <strong>"Adicionar este Artigo ao Meu Livro"</strong> para montar uma edição completa.
+              </p>
+              <button
+                onClick={() => setActiveTab('current')}
+                className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors flex items-center gap-1.5"
+              >
+                <Plus className="w-3.5 h-3.5 text-amber-400" />
+                Ir para o Artigo Atual
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {/* Card Superior: Preview da Capa e Edição de Título / Subtítulo */}
+              <div className="flex gap-4 p-3.5 bg-slate-50 border border-slate-200/90 rounded-xl">
+                {/* Miniatura da Capa Estilo Passages */}
+                <div className="relative shrink-0 w-24 h-36 bg-slate-900 rounded-lg shadow-md overflow-hidden border border-slate-700/50 group">
+                  {coverPreviewUrl ? (
+                    <img src={coverPreviewUrl} alt="Capa" className="w-full h-full object-cover" />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-500">
+                      Capa
+                    </div>
+                  )}
+                  {/* Botão de trocar imagem por cima */}
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    title="Carregar imagem própria de capa"
+                    className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center text-white text-[10px] transition-opacity cursor-pointer font-medium p-1 text-center"
+                  >
+                    <Upload className="w-4 h-4 mb-1 text-amber-400" />
+                    Alterar Capa
+                  </button>
+                </div>
+
+                {/* Campos de Título, Subtítulo e Autor */}
+                <div className="flex-1 space-y-2">
+                  <div className="text-[10px] font-bold tracking-wider uppercase text-amber-600">
+                    Publicação • Pronta para Exportar
+                  </div>
+
+                  <div>
+                    <input
+                      type="text"
+                      value={publication.title}
+                      onChange={async (e) => {
+                        const updated = { ...publication, title: e.target.value };
+                        setPublication(updated);
+                        await savePublication(updated);
+                      }}
+                      placeholder="Título do Livro (ex: Freud)"
+                      className="w-full font-serif font-bold text-base text-slate-900 px-2 py-1 border-b border-slate-300 focus:border-amber-600 focus:outline-none bg-transparent"
+                    />
+                  </div>
+
+                  <div>
+                    <input
+                      type="text"
+                      value={publication.subtitle}
+                      onChange={async (e) => {
+                        const updated = { ...publication, subtitle: e.target.value };
+                        setPublication(updated);
+                        await savePublication(updated);
+                      }}
+                      placeholder="Subtítulo (ex: Para entender de uma vez)"
+                      className="w-full italic font-serif text-xs text-slate-600 px-2 py-0.5 border-b border-slate-300 focus:border-amber-600 focus:outline-none bg-transparent"
+                    />
+                  </div>
+
+                  {/* Seletor de Tema da Capa */}
+                  <div className="pt-1 flex items-center gap-1.5">
+                    <span className="text-[10px] font-semibold text-slate-500">Estilo:</span>
+                    <button
+                      onClick={() => handleSelectPresetTheme('passages-dark')}
+                      className={`px-2 py-0.5 text-[10px] rounded font-medium transition-all ${
+                        publication.cover.type === 'preset' && publication.cover.presetTheme === 'passages-dark'
+                          ? 'bg-slate-900 text-white font-bold'
+                          : 'bg-slate-200/80 text-slate-700 hover:bg-slate-300'
+                      }`}
+                    >
+                      Dark
+                    </button>
+                    <button
+                      onClick={() => handleSelectPresetTheme('classic-light')}
+                      className={`px-2 py-0.5 text-[10px] rounded font-medium transition-all ${
+                        publication.cover.type === 'preset' && publication.cover.presetTheme === 'classic-light'
+                          ? 'bg-slate-900 text-white font-bold'
+                          : 'bg-slate-200/80 text-slate-700 hover:bg-slate-300'
+                      }`}
+                    >
+                      Clássico
+                    </button>
+                    <button
+                      onClick={() => handleSelectPresetTheme('minimal-slate')}
+                      className={`px-2 py-0.5 text-[10px] rounded font-medium transition-all ${
+                        publication.cover.type === 'preset' && publication.cover.presetTheme === 'minimal-slate'
+                          ? 'bg-slate-900 text-white font-bold'
+                          : 'bg-slate-200/80 text-slate-700 hover:bg-slate-300'
+                      }`}
+                    >
+                      Slate
+                    </button>
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      title="Upload de foto própria"
+                      className={`p-1 rounded text-slate-600 hover:text-amber-600 hover:bg-slate-200 ${
+                        publication.cover.type === 'custom' ? 'text-amber-600 bg-amber-100 font-bold' : ''
+                      }`}
+                    >
+                      <ImageIcon className="w-3.5 h-3.5" />
+                    </button>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={handleCoverUpload}
+                      className="hidden"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Barra de Métricas no Estilo Passages */}
+              <div className="flex items-center justify-around py-2 px-3 bg-slate-900 text-white rounded-lg text-center shadow-inner">
+                <div>
+                  <div className="text-xs font-bold text-amber-400">{publication.articles.length}</div>
+                  <div className="text-[9px] uppercase tracking-wider text-slate-400">Artigos</div>
+                </div>
+                <div className="h-5 w-[1px] bg-slate-800"></div>
+                <div>
+                  <div className="text-xs font-bold text-white">{formattedReadingTime}</div>
+                  <div className="text-[9px] uppercase tracking-wider text-slate-400">Leitura</div>
+                </div>
+                <div className="h-5 w-[1px] bg-slate-800"></div>
+                <div>
+                  <div className="text-xs font-bold text-slate-200">{totalWords.toLocaleString('pt-BR')}</div>
+                  <div className="text-[9px] uppercase tracking-wider text-slate-400">Palavras</div>
+                </div>
+              </div>
+
+              {/* Lista de Capítulos Reordenáveis */}
+              <div>
+                <div className="flex items-center justify-between text-[11px] font-semibold text-slate-600 mb-2 px-1">
+                  <span>CAPÍTULOS ({publication.articles.length})</span>
+                  <span className="text-[10px] text-slate-400 font-normal italic">Use as setas para reordenar</span>
+                </div>
+
+                <div className="space-y-1.5 max-h-[190px] overflow-y-auto pr-1">
+                  {publication.articles.map((art, idx) => {
+                    const num = String(idx + 1).padStart(2, '0');
+                    return (
+                      <div
+                        key={art.id}
+                        className="flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100/80 border border-slate-200/70 rounded-lg text-xs transition-colors group"
+                      >
+                        <div className="flex items-start gap-2.5 overflow-hidden pr-2">
+                          <span className="font-mono text-slate-400 font-bold text-[11px] pt-0.5 shrink-0">
+                            {num}.
+                          </span>
+                          <div className="overflow-hidden">
+                            <p className="font-medium text-slate-800 truncate text-[11px]" title={art.title}>
+                              {art.title}
+                            </p>
+                            <p className="text-[10px] text-slate-400 truncate">
+                              {art.siteName || 'Web'} • {art.readingTimeMinutes} min
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Botões de Ação (Subir, Descer, Remover) */}
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            onClick={() => handleMoveUp(idx)}
+                            disabled={idx === 0}
+                            title="Subir capítulo"
+                            className="p-1 text-slate-400 hover:text-slate-800 disabled:opacity-30 rounded hover:bg-slate-200 transition-colors"
+                          >
+                            <ArrowUp className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleMoveDown(idx)}
+                            disabled={idx === publication.articles.length - 1}
+                            title="Descer capítulo"
+                            className="p-1 text-slate-400 hover:text-slate-800 disabled:opacity-30 rounded hover:bg-slate-200 transition-colors"
+                          >
+                            <ArrowDown className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleRemoveArticle(art.id)}
+                            title="Remover este capítulo"
+                            className="p-1 text-slate-400 hover:text-red-600 rounded hover:bg-red-50 transition-colors ml-0.5"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Progresso de Compilação */}
+              {bookProgress && (
+                <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900 space-y-1.5 animate-pulse">
+                  <div className="flex items-center justify-between font-medium">
+                    <span className="flex items-center gap-1.5">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-600" />
+                      {bookProgress.message}
+                    </span>
+                    <span>{bookProgress.current} / {bookProgress.total}</span>
+                  </div>
                   <div className="w-full bg-amber-200 rounded-full h-1.5 overflow-hidden">
                     <div
                       className="bg-amber-600 h-1.5 rounded-full transition-all duration-300"
-                      style={{ width: `${Math.round((progress.current / progress.total) * 100)}%` }}
+                      style={{ width: `${Math.round((bookProgress.current / bookProgress.total) * 100)}%` }}
                     ></div>
                   </div>
-                )}
-              </div>
-            )}
-
-            {/* Download Success Banner */}
-            {downloadSuccess && status.state !== 'generating' && (
-              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg flex items-start gap-2.5 text-emerald-900 text-xs">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                <div>
-                  <p className="font-semibold">Arquivo EPUB baixado com sucesso!</p>
-                  <p className="text-emerald-700 mt-0.5">
-                    O arquivo está na sua pasta de Downloads, pronto para ser enviado para o Kindle.
-                  </p>
                 </div>
+              )}
+
+              {downloadSuccessToast && (
+                <div className="p-2.5 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-lg text-xs flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>Livro baixado com sucesso! Pronto para o Kindle.</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Botões de Ação do Livro */}
+          {publication.articles.length > 0 && (
+            <div className="mt-4 space-y-2 pt-3 border-t border-slate-100">
+              <button
+                onClick={handleDownloadFullBook}
+                disabled={status.state === 'generating'}
+                className="w-full py-2.5 px-4 bg-amber-500 hover:bg-amber-400 active:scale-[0.99] text-slate-950 rounded-lg font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition-all"
+              >
+                {status.state === 'generating' ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Compilando Livro...
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-4 h-4" />
+                    Baixar Livro Completo para Kindle ({publication.articles.length} Capítulos)
+                  </>
+                )}
+              </button>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    const url = 'https://www.amazon.com/sendtokindle';
+                    if (typeof chrome !== 'undefined' && chrome.tabs?.create) {
+                      chrome.tabs.create({ url });
+                    } else {
+                      window.open(url, '_blank');
+                    }
+                  }}
+                  className="flex-1 py-1.5 px-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg text-slate-700 font-medium text-[11px] flex items-center justify-center gap-1.5 transition-colors"
+                >
+                  <span>Amazon Send to Kindle</span>
+                  <ExternalLink className="w-3 h-3 text-slate-400" />
+                </button>
+
+                <button
+                  onClick={handleClearBook}
+                  disabled={status.state === 'generating'}
+                  className="py-1.5 px-2.5 text-red-600 hover:bg-red-50 border border-red-200 rounded-lg text-[11px] font-medium transition-colors"
+                >
+                  Limpar
+                </button>
               </div>
-            )}
-          </div>
-        )}
-
-        {/* Action Buttons */}
-        <div className="mt-5 space-y-2 pt-3 border-t border-slate-100">
-          <button
-            onClick={handleGenerateEpub}
-            disabled={status.state === 'extracting' || status.state === 'generating' || !article}
-            className={`w-full py-2.5 px-4 rounded-lg font-semibold text-xs flex items-center justify-center gap-2 shadow-sm transition-all ${
-              status.state === 'generating'
-                ? 'bg-amber-400 text-slate-900 cursor-not-allowed'
-                : 'bg-amber-500 hover:bg-amber-400 active:scale-[0.99] text-slate-950 hover:shadow'
-            }`}
-          >
-            {status.state === 'generating' ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Criando EPUB...
-              </>
-            ) : (
-              <>
-                <Download className="w-4 h-4" />
-                Baixar EPUB para Kindle
-              </>
-            )}
-          </button>
-
-          <button
-            onClick={handleOpenSendToKindle}
-            className="w-full py-2 px-3 bg-slate-50 hover:bg-slate-100 active:scale-[0.99] border border-slate-200 rounded-lg text-slate-700 font-medium text-xs flex items-center justify-center gap-1.5 transition-colors"
-          >
-            <span>Abrir Amazon Send to Kindle Web</span>
-            <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
-          </button>
+            </div>
+          )}
         </div>
-      </div>
+      )}
     </div>
   );
 };
