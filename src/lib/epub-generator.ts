@@ -649,20 +649,27 @@ a {
 .callout-box {
   margin: 2em 0;
   padding: 1.2em 1.4em;
-  border: 2px solid #000000;
+  border-top: 2px solid #000000;
+  border-left: 2px solid #000000;
+  border-right: 6px solid #000000;
+  border-bottom: 6px solid #000000;
   box-shadow: 4px 4px 0px #000000;
   background-color: transparent;
   page-break-inside: avoid;
   break-inside: avoid;
 }
 
+.callout-box .callout-title,
+.callout-box > span:first-child,
+.callout-box > strong:first-child,
+.callout-box > b:first-child,
 .callout-box h1,
 .callout-box h2,
 .callout-box h3,
 .callout-box h4,
 .callout-box h5,
-.callout-box h6,
-.callout-box .callout-title {
+.callout-box h6 {
+  display: block;
   font-family: sans-serif;
   font-size: 1.15em;
   font-weight: bold;
@@ -672,6 +679,7 @@ a {
   text-align: left;
   page-break-after: avoid;
   break-after: avoid;
+  color: #000000;
 }
 
 .callout-box p {

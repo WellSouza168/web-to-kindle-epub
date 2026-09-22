@@ -67,12 +67,28 @@ function cleanElement(el: Element, options: { removeImages?: boolean }): void {
     // Detectar blocos de destaque / callouts e normalizar para class="callout-box"
     const isCallout =
       child.getAttribute('data-callout') === 'true' ||
-      /\b(callout|destaque|box-materia|infobox|wp-block-group|box-destaque|box_destaque|sidebar-box)\b/i.test(child.className || '');
+      /\b(box|callout|destaque|infobox|sidebar|wp-block-group|quadro|saiba-mais|nota|glossario|curiosidade)\b/i.test(child.className || '');
 
-    if (isCallout && (child.textContent || '').trim().length > 30) {
+    if (isCallout && (child.textContent || '').trim().length > 20) {
       child.className = 'callout-box';
       child.removeAttribute('data-callout');
-    } else if (child.className && child.className !== 'callout-box') {
+
+      // Normalizar título interno do box (promover span/strong inicial para h4 com destaque)
+      const first = child.firstElementChild;
+      if (first) {
+        const firstTag = first.tagName.toLowerCase();
+        if (firstTag === 'span' || firstTag === 'strong' || firstTag === 'b') {
+          const h4 = child.ownerDocument.createElement('h4');
+          h4.className = 'callout-title';
+          while (first.firstChild) {
+            h4.appendChild(first.firstChild);
+          }
+          child.replaceChild(h4, first);
+        } else if (firstTag.startsWith('h')) {
+          first.classList.add('callout-title');
+        }
+      }
+    } else if (child.className && child.className !== 'callout-box' && child.className !== 'callout-title') {
       child.removeAttribute('class');
     }
 

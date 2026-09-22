@@ -13,12 +13,12 @@ export function extractArticleFromHtml(rawHtml: string, pageUrl: string): Articl
   baseEl.href = pageUrl;
   doc.head.appendChild(baseEl);
 
-  // Identificar e marcar blocos de destaque (callouts/asides/sidebars) antes da leitura
-  const calloutSelectors = 'aside, [class*="callout"], [class*="destaque"], [class*="infobox"], [class*="sidebar"], [class*="wp-block-group"], [class*="box-"]';
+  // Identificar e marcar blocos de destaque (callouts/asides/sidebars/boxes) antes da leitura
+  const calloutSelectors = 'aside, .box, [class*="box"], [class*="callout"], [class*="destaque"], [class*="infobox"], [class*="sidebar"], [class*="wp-block-group"], [class*="quadro"]';
   const candidates = doc.querySelectorAll(calloutSelectors);
   candidates.forEach((el) => {
-    // Apenas se contiver texto substancial (> 35 caracteres) para ignorar widgets ou anúncios
-    if ((el.textContent || '').trim().length > 35) {
+    // Apenas se contiver texto substancial (> 25 caracteres) para ignorar widgets vazios
+    if ((el.textContent || '').trim().length > 25) {
       el.setAttribute('data-callout', 'true');
     }
   });
