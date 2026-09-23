@@ -52,8 +52,8 @@ function cleanElement(el: Element, options: { removeImages?: boolean }): void {
       continue;
     }
 
-    // Remover disclaimers de anúncios (ex: "Continua após a publicidade", "Publicidade")
-    if (isAdDisclaimerText(child.textContent || '')) {
+    // Remover disclaimers de anúncios e chamadas de newsletter
+    if (isAdDisclaimerText(child.textContent || '') || isNewsletterPromptText(child.textContent || '')) {
       child.remove();
       continue;
     }
@@ -202,3 +202,51 @@ export function isAdDisclaimerText(rawText: string): boolean {
 
   return false;
 }
+
+/**
+ * Identifica textos, títulos e mensagens de confirmação de caixas de newsletter e captação de e-mails.
+ */
+export function isNewsletterPromptText(rawText: string): boolean {
+  if (!rawText) return false;
+
+  const text = rawText
+    .trim()
+    .toLowerCase()
+    .replace(/^[-—–\[\(\s*!]+|[-—–\]\)\s*.!]+$/g, '')
+    .trim();
+
+  if (!text) return false;
+
+  const exactPhrases = [
+    'as mais lidas da semana',
+    'as mais lidas',
+    'inscreva-se aqui',
+    'inscreva-se',
+    'cadastre-se',
+    'cadastro efetuado com sucesso',
+    'inscrição realizada com sucesso',
+    'receba nossa newsletter',
+    'assine nossa newsletter',
+    'assine a newsletter',
+    'newsletter da super'
+  ];
+
+  if (exactPhrases.includes(text)) {
+    return true;
+  }
+
+  // Padrões inequívocos de chamadas ou confirmações de newsletter
+  if (
+    /você receberá nossas newsletters/i.test(text) ||
+    /receberá nossas newsletters/i.test(text) ||
+    /uma seleção das reportagens que mais bombaram/i.test(text) ||
+    /reportagens que mais bombaram no site/i.test(text) ||
+    /^receba as (principais|melhores) notícias/i.test(text) ||
+    /receba diariamente no seu e-?mail/i.test(text)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+

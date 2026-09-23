@@ -379,6 +379,15 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleOpenSendToKindle = () => {
+    const url = 'https://www.amazon.com/sendtokindle';
+    if (typeof chrome !== 'undefined' && chrome.tabs?.create) {
+      chrome.tabs.create({ url });
+    } else {
+      window.open(url, '_blank');
+    }
+  };
+
   // Reordenação de capítulos
   const handleMoveUp = async (index: number) => {
     if (index === 0) return;
@@ -866,6 +875,15 @@ export const App: React.FC = () => {
                   </>
                 )}
               </button>
+
+              <button
+                type="button"
+                onClick={handleOpenSendToKindle}
+                className="w-full py-1.5 px-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg text-slate-700 font-medium text-[11px] flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <span>Amazon Send to Kindle</span>
+                <ExternalLink className="w-3 h-3 text-slate-400" />
+              </button>
             </div>
           )}
         </div>
@@ -1132,15 +1150,9 @@ export const App: React.FC = () => {
 
               <div className="flex gap-2">
                 <button
-                  onClick={() => {
-                    const url = 'https://www.amazon.com/sendtokindle';
-                    if (typeof chrome !== 'undefined' && chrome.tabs?.create) {
-                      chrome.tabs.create({ url });
-                    } else {
-                      window.open(url, '_blank');
-                    }
-                  }}
-                  className="flex-1 py-1.5 px-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg text-slate-700 font-medium text-[11px] flex items-center justify-center gap-1.5 transition-colors"
+                  type="button"
+                  onClick={handleOpenSendToKindle}
+                  className="flex-1 py-1.5 px-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg text-slate-700 font-medium text-[11px] flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                 >
                   <span>Amazon Send to Kindle</span>
                   <ExternalLink className="w-3 h-3 text-slate-400" />
