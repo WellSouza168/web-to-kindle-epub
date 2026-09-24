@@ -64,7 +64,11 @@ export async function generateKindleEpub(
 
   return await zip.generateAsync({
     type: 'blob',
-    mimeType: 'application/epub+zip'
+    mimeType: 'application/epub+zip',
+    compression: 'DEFLATE',
+    compressionOptions: {
+      level: 9
+    }
   });
 }
 
@@ -105,6 +109,7 @@ export async function generatePublicationEpub(
   // 4. Processar capítulos e imagens
   const allImages: ProcessedImage[] = [];
   const processedChapters: { filename: string; title: string; html: string }[] = [];
+  const sharedImagesMap = new Map<string, string>(); // url original -> internalPath compartilhado
 
   for (let idx = 0; idx < totalArticles; idx++) {
     const art = publication.articles[idx];
@@ -120,9 +125,17 @@ export async function generatePublicationEpub(
         const imgResult = await extractAndProcessImages(art.contentHtml, art.url);
         // Utilizar o HTML com imagens locais atualizadas
         chapterHtml = imgResult.updatedHtml;
-        // Prefixar imagens para evitar colisões entre capítulos
+        // Prefixar imagens para evitar colisões entre capítulos com desduplicação inteligente
         for (const img of imgResult.images) {
+          // Se esta mesma imagem (por URL original) já foi salva em outro capítulo, reutiliza
+          if (sharedImagesMap.has(img.originalUrl)) {
+            const existingPath = sharedImagesMap.get(img.originalUrl)!;
+            chapterHtml = chapterHtml.split(img.internalPath).join(existingPath);
+            continue;
+          }
+
           const uniquePath = `images/c${chapterNum}_${img.internalPath.replace(/^images\//, '')}`;
+          sharedImagesMap.set(img.originalUrl, uniquePath);
           chapterHtml = chapterHtml.split(img.internalPath).join(uniquePath);
           const uniqueImg: ProcessedImage = {
             ...img,
@@ -173,7 +186,11 @@ export async function generatePublicationEpub(
 
   return await zip.generateAsync({
     type: 'blob',
-    mimeType: 'application/epub+zip'
+    mimeType: 'application/epub+zip',
+    compression: 'DEFLATE',
+    compressionOptions: {
+      level: 9
+    }
   });
 }
 

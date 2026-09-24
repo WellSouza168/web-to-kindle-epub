@@ -28,14 +28,14 @@ export async function generateBookCover(
       async (blob) => {
         if (!blob) return reject(new Error('Falha ao renderizar imagem da capa.'));
         const arrayBuffer = await blob.arrayBuffer();
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.84);
         resolve({
           data: new Uint8Array(arrayBuffer),
           dataUrl
         });
       },
       'image/jpeg',
-      0.9
+      0.84
     );
   });
 }

@@ -27,7 +27,11 @@ export function extractArticleFromHtml(rawHtml: string, pageUrl: string): Articl
     // 2. Normalizar classes tipográficas que causam falso-positivo no Readability (ex: Tailwind font-extrabold)
     normalizeTypographyClasses(doc);
 
-    // 3. Identificar e marcar blocos de destaque (callouts/asides/sidebars/boxes) antes da leitura
+    // 3. Desaninhar cascas/wrappers 'div' redundantes de CMSs modernos (G1, Gutenberg, etc.)
+    // Evita que o Readability descarte parágrafos legítimos com links jornalísticos longos
+    unwrapRedundantDivs(doc);
+
+    // 4. Identificar e marcar blocos de destaque (callouts/asides/sidebars/boxes) antes da leitura
     const calloutSelectors = 'aside, .box, [class*="box"], [class*="callout"], [class*="destaque"], [class*="infobox"], [class*="sidebar"], [class*="wp-block-group"], [class*="quadro"]';
     const candidates = doc.querySelectorAll(calloutSelectors);
     candidates.forEach((el) => {
@@ -150,7 +154,17 @@ function stripAdElements(doc: Document): void {
     '[class*="news-box"]',
     '.box-newsletter',
     '.block-newsletter',
-    '.abril-newsletter'
+    '.abril-newsletter',
+    // Blocos de assinatura, paywalls e carrosséis institucionais (ex: Abril/Superinteressante)
+    '.sidebar-above-footer',
+    '[class*="sidebar-above-footer"]',
+    '[class*="barra_assine"]',
+    '[class*="assine-abril"]',
+    '[class*="new-footer-carousel"]',
+    '[class*="f-brands"]',
+    '[class*="box-inf-capas"]',
+    '[class*="goread"]',
+    '[class*="clube-do-assinante"]'
   ].join(', ');
 
   doc.querySelectorAll(adSelectors).forEach((el) => {
@@ -245,5 +259,73 @@ function normalizeTypographyClasses(doc: Document): void {
       el.setAttribute('class', normalized.trim());
     }
   });
+}
+
+/**
+ * Desaninha wrappers <div> ou <section> redundantes gerados por CMSs modernos (Gutenberg, G1/Globo, Next.js).
+ * Muitos CMSs encapsulam cada parágrafo individualmente em cascas como <div id="chunk-xxx"><div class="mc-column"><p>...</p></div></div>.
+ * Quando um parágrafo contém links jornalísticos relativamente longos (ex: citações de outras matérias que ocupam >50% do parágrafo),
+ * a função interna _cleanConditionally do Mozilla Readability avalia a densidade de links do <div> pai e o apaga por confundi-lo
+ * com um bloco de links publicitários ou navegação de rodapé.
+ * Ao "descascar" os wrappers redundantes, o <p> passa a ser filho direto do container do artigo, onde nunca é removido.
+ */
+function unwrapRedundantDivs(doc: Document): void {
+  // Padrões de classes/IDs que NÃO devem ser desaninhados para não destruir a identidade
+  // de sidebars, anúncios, rodapés ou carrosséis que o Readability precisa identificar e descartar
+  const UNLIKELY_PATTERN = /sidebar|footer|header|menu|widget|carousel|banner|promo|ad[-_]|ads[-_]|assine|related|recommend|author-box/i;
+
+  let changed = true;
+  let iterations = 0;
+  // Limite de iterações para evitar loops infinitos em DOMs anômalos
+  while (changed && iterations < 10) {
+    changed = false;
+    iterations++;
+    // Mirar APENAS em <div> estruturais/layout (nunca em <section>, <aside>, etc.)
+    const divs = Array.from(doc.querySelectorAll('div'));
+    for (const div of divs) {
+      if (isProtectedElement(div, doc)) {
+        continue;
+      }
+
+      // Se o div possui classes ou IDs de widgets/anúncios/sidebars, não desaninhar
+      const classAndId = `${div.className || ''} ${div.id || ''}`;
+      if (UNLIKELY_PATTERN.test(classAndId)) {
+        continue;
+      }
+
+      // 1. Se o div estiver completamente vazio (sem filhos e sem texto), remove
+      if (div.children.length === 0 && (!div.textContent || !div.textContent.trim())) {
+        div.remove();
+        changed = true;
+        continue;
+      }
+
+      // 2. Se o div contiver apenas 1 elemento filho e nenhum texto substantivo órfão fora dele
+      if (div.children.length === 1) {
+        const child = div.firstElementChild!;
+
+        // Verifica se há nós de texto soltos fora do elemento filho
+        let hasOutsideText = false;
+        for (const childNode of Array.from(div.childNodes)) {
+          if (childNode !== child && childNode.nodeType === 3 /* Node.TEXT_NODE */) {
+            if ((childNode.textContent || '').trim().length > 0) {
+              hasOutsideText = true;
+              break;
+            }
+          }
+        }
+        if (hasOutsideText) continue;
+
+        const allowedTags = [
+          'P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
+          'BLOCKQUOTE', 'DIV', 'FIGURE', 'UL', 'OL', 'PRE'
+        ];
+        if (allowedTags.includes(child.tagName)) {
+          div.replaceWith(child);
+          changed = true;
+        }
+      }
+    }
+  }
 }
 

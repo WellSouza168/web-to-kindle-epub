@@ -228,21 +228,28 @@ export function isNewsletterPromptText(rawText: string): boolean {
     'receba nossa newsletter',
     'assine nossa newsletter',
     'assine a newsletter',
-    'newsletter da super'
+    'newsletter da super',
+    'quem assina tem mais vantagens',
+    'leia também no goread',
+    'abril signature'
   ];
 
   if (exactPhrases.includes(text)) {
     return true;
   }
 
-  // Padrões inequívocos de chamadas ou confirmações de newsletter
+  // Padrões inequívocos de chamadas ou confirmações de newsletter e marketing de assinatura
   if (
     /você receberá nossas newsletters/i.test(text) ||
     /receberá nossas newsletters/i.test(text) ||
     /uma seleção das reportagens que mais bombaram/i.test(text) ||
     /reportagens que mais bombaram no site/i.test(text) ||
     /^receba as (principais|melhores) notícias/i.test(text) ||
-    /receba diariamente no seu e-?mail/i.test(text)
+    /receba diariamente no seu e-?mail/i.test(text) ||
+    /baixe e leia as edições digitais/i.test(text) ||
+    /leia todas as revistas em um só app/i.test(text) ||
+    /conteúdo criado por especialistas/i.test(text) ||
+    /acompanhe as publicações dos seus autores favoritos/i.test(text)
   ) {
     return true;
   }
