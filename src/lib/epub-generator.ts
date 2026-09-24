@@ -240,6 +240,7 @@ function buildArticleXhtml(
   const author = escapeXml(options.author || article.byline || article.siteName || '');
   const site = escapeXml(article.siteName || new URL(article.url).hostname);
   const sourceUrl = escapeXml(article.url);
+  const excerpt = article.excerpt ? escapeXml(article.excerpt) : null;
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
@@ -252,6 +253,7 @@ function buildArticleXhtml(
 <body>
   <header class="article-header">
     <h1 class="article-title">${title}</h1>
+    ${excerpt ? `<p class="article-subtitle">${excerpt}</p>` : ''}
     <div class="article-meta">
       ${author ? `<span>Por <strong>${author}</strong></span> • ` : ''}
       <span>Fonte: <a href="${sourceUrl}">${site}</a></span> • 
@@ -405,6 +407,7 @@ function buildChapterXhtml(art: any, chapterNumber: number, cleanBody: string): 
   const author = escapeXml(art.byline || art.siteName || '');
   const site = escapeXml(art.siteName || 'Web');
   const url = escapeXml(art.url);
+  const excerpt = art.excerpt ? escapeXml(art.excerpt) : null;
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
@@ -418,8 +421,9 @@ function buildChapterXhtml(art: any, chapterNumber: number, cleanBody: string): 
   <div class="chapter-header">
     <div class="chapter-number">CAPÍTULO ${numStr}</div>
     <h1 class="chapter-title">${title}</h1>
+    ${excerpt ? `<p class="chapter-subtitle">${excerpt}</p>` : ''}
     <div class="chapter-meta">
-      ${author ? `<span>${author}</span> • ` : ''}
+      ${author ? `<span>Por <strong>${author}</strong></span> • ` : ''}
       <span>Fonte: <a href="${url}">${site}</a></span> • 
       <span>${art.readingTimeMinutes} min de leitura</span>
     </div>
@@ -744,6 +748,16 @@ a {
   line-height: 1.2;
 }
 
+.chapter-subtitle {
+  font-size: 1.08em;
+  font-style: italic;
+  color: #333;
+  line-height: 1.45;
+  margin-top: 0.4em;
+  margin-bottom: 0.8em;
+  text-align: justify;
+}
+
 .chapter-meta {
   font-size: 0.9em;
   font-style: italic;
@@ -812,6 +826,16 @@ a {
 .article-title {
   margin-top: 0;
   margin-bottom: 0.4em;
+}
+
+.article-subtitle {
+  font-size: 1.08em;
+  font-style: italic;
+  color: #333;
+  line-height: 1.45;
+  margin-top: 0.4em;
+  margin-bottom: 0.8em;
+  text-align: justify;
 }
 
 .article-meta {

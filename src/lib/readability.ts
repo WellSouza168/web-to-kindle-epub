@@ -45,6 +45,11 @@ export function extractArticleFromHtml(rawHtml: string, pageUrl: string): Articl
       return null;
     }
 
+    // Extrair autor e resumo do documento íntegro antes que o Readability descarte cabeçalhos durante o parse
+    const initialSite = extractHostname(pageUrl);
+    const preExtractedAuthor = extractSmartAuthor(doc, null, initialSite);
+    const preExtractedExcerpt = extractSmartExcerpt(doc, null);
+
     const reader = new Readability(doc, {
       charThreshold: 100,
       keepClasses: true
@@ -61,16 +66,24 @@ export function extractArticleFromHtml(rawHtml: string, pageUrl: string): Articl
     const wordCount = words.length;
     const readingTimeMinutes = Math.max(1, Math.ceil(wordCount / 200)); // Média de 200 palavras por minuto
 
-    // Título e Autor
+    // Título, Autor, Resumo e Site
     const title = (parsed.title || doc.title || 'Artigo sem título').trim();
-    const byline = parsed.byline ? parsed.byline.trim() : null;
-    const siteName = (parsed.siteName || extractHostname(pageUrl)).trim();
+    const siteName = (parsed.siteName || initialSite).trim();
+    
+    // Priorizar autor humano real; fallback para parsed.byline se não for o nome da marca
+    let byline = preExtractedAuthor;
+    if (!byline && parsed.byline && !isBrandName(parsed.byline, siteName)) {
+      byline = cleanAuthorText(parsed.byline, siteName);
+    }
+    const excerpt = (parsed.excerpt && parsed.excerpt.trim().length > 15)
+      ? parsed.excerpt.trim()
+      : preExtractedExcerpt;
 
     return {
       title,
       byline,
       siteName,
-      excerpt: parsed.excerpt ? parsed.excerpt.trim() : null,
+      excerpt,
       url: pageUrl,
       readingTimeMinutes,
       wordCount,
@@ -327,5 +340,129 @@ function unwrapRedundantDivs(doc: Document): void {
       }
     }
   }
+}
+
+/**
+ * Extrai o autor real / jornalista da matéria com filtros inteligentes de portais.
+ * Resolve casos onde o Readability retorna null (ex: G1 .content-publication-data__from)
+ * ou onde retorna a organização editorial em vez do autor (ex: "Super", "Globo", "Redação").
+ */
+function extractSmartAuthor(doc: Document, parsedByline: string | null, siteName: string): string | null {
+  if (parsedByline && !isBrandName(parsedByline, siteName)) {
+    const cleaned = cleanAuthorText(parsedByline, siteName);
+    if (cleaned && !isBrandName(cleaned, siteName)) {
+      return cleaned;
+    }
+  }
+
+  const candidateSelectors = [
+    '.content-publication-data__from',           // G1 / Globo
+    '[itemprop="author"] [itemprop="name"]',     // Schema.org Microdata
+    '[itemprop="author"]',
+    '.author-name',                              // WordPress / CMSs
+    '.author',                                   // Abril / Super / Veja
+    '.c-byline__author',
+    '.byline__author',
+    '[class*="author-name"]',
+    '[class*="autor__nome"]',
+    '[class*="autor-nome"]',
+    'meta[name="author"]',                       // Metatags HTML
+    'meta[property="article:author"]',
+    'meta[name="dc.creator"]',
+    '.byline',
+    '[class*="byline"]'
+  ];
+
+  for (const sel of candidateSelectors) {
+    if (sel.startsWith('meta')) {
+      const meta = doc.querySelector(sel);
+      const val = meta?.getAttribute('content')?.trim();
+      if (val && !isBrandName(val, siteName)) {
+        const cleaned = cleanAuthorText(val, siteName);
+        if (cleaned && !isBrandName(cleaned, siteName)) return cleaned;
+      }
+    } else {
+      const el = doc.querySelector(sel);
+      if (el) {
+        const raw = (el.textContent || '').trim();
+        const cleaned = cleanAuthorText(raw, siteName);
+        if (cleaned && cleaned.length >= 3 && cleaned.length <= 150 && !isBrandName(cleaned, siteName)) {
+          return cleaned;
+        }
+      }
+    }
+  }
+
+  return parsedByline && !isBrandName(parsedByline, siteName) ? cleanAuthorText(parsedByline, siteName) : null;
+}
+
+function isBrandName(name: string, siteName: string): boolean {
+  const norm = name.toLowerCase().trim();
+  const siteNorm = siteName.toLowerCase().trim();
+  const brands = [
+    'super', 'superinteressante', 'g1', 'globo', 'globo.com', 'abril', 
+    'redação', 'redacao', 'editoria', 'da redação', 'da redacao',
+    'estadao', 'estadão', 'folha', 'uol', 'veja', 'exame'
+  ];
+  return brands.includes(norm) || norm === siteNorm;
+}
+
+function cleanAuthorText(text: string, _siteName?: string): string {
+  if (!text) return '';
+  let cleaned = text.replace(/\s+/g, ' ').trim();
+  cleaned = cleaned.split('|')[0].trim();
+  cleaned = cleaned.replace(/\b\d{1,2}\s+(?:de\s+)?(?:jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)[a-z]*\s+\d{2,4}.*$/i, '');
+  cleaned = cleaned.replace(/\b\d{1,2}\/\d{1,2}\/\d{2,4}.*$/, '');
+  cleaned = cleaned.replace(/\b\d{1,2}h\d{2}.*$/, '');
+  cleaned = cleaned.replace(/^Por\s+/i, '');
+  cleaned = cleaned.replace(/—\s*Brasília.*$/i, '');
+  cleaned = cleaned.replace(/,\s*(?:g1|globo|super|veja|estadao|folha).*$/i, '');
+  cleaned = cleaned.replace(/\s*,\s*$/, '');
+  return cleaned.trim();
+}
+
+/**
+ * Extrai o resumo / subtítulo / linha fina da matéria.
+ * Caso o Readability não tenha capturado, busca em metatags e elementos de linha fina.
+ */
+function extractSmartExcerpt(doc: Document, parsedExcerpt: string | null): string | null {
+  if (parsedExcerpt && parsedExcerpt.trim().length > 15) {
+    return parsedExcerpt.trim();
+  }
+
+  const metaSelectors = [
+    'meta[name="description"]',
+    'meta[property="og:description"]',
+    'meta[name="twitter:description"]'
+  ];
+
+  for (const sel of metaSelectors) {
+    const meta = doc.querySelector(sel);
+    const val = meta?.getAttribute('content')?.trim();
+    if (val && val.length > 20 && !val.includes('...') && !val.toLowerCase().startsWith('assine')) {
+      return val;
+    }
+  }
+
+  const elSelectors = [
+    '.content-head__subtitle',
+    '.subtitle',
+    '[class*="sub-title"]',
+    '[class*="subtitle"]',
+    '.lead',
+    '[class*="lead"]'
+  ];
+
+  for (const sel of elSelectors) {
+    const el = doc.querySelector(sel);
+    if (el) {
+      const val = (el.textContent || '').trim();
+      if (val.length > 20 && val.length < 500) {
+        return val;
+      }
+    }
+  }
+
+  return parsedExcerpt ? parsedExcerpt.trim() : null;
 }
 
